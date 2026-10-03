@@ -28,6 +28,8 @@ import httpx
 import pytest
 
 import scripts.bench as bench
+from oai2.runtime import host_capacity
+from oai2.verification import reproducibility
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -833,14 +835,25 @@ def test_summary_records_the_harness_revision_that_produced_it(
 
 
 def test_harness_identity_reports_git_failure_instead_of_omitting(monkeypatch) -> None:
-    """A broken git must degrade to an explicit marker, not a missing key."""
+    """A broken git must degrade to an explicit marker, not a missing key.
+
+    The marker changed shape when provenance moved to its single owner
+    (``oai2.verification.reproducibility``). The old code interpolated the
+    exception type into the commit, producing a commit-shaped string like
+    ``unavailable:OSError`` that could be mistaken for a revision. The owner
+    emits the unambiguous ``unavailable`` and keeps the reason separate.
+
+    What this test is really for is unchanged and is the assertion that matters:
+    ``dirty`` reads ``unknown``, never ``false``. A git that could not be read
+    is not a verified clean tree.
+    """
 
     def boom(*a, **k):
         raise OSError("git not found")
 
-    monkeypatch.setattr(bench.subprocess, "run", boom)
+    monkeypatch.setattr(reproducibility.subprocess, "run", boom)
     info = bench._harness_identity()
-    assert info["commit"].startswith("unavailable:OSError")
+    assert info["commit"] == "unavailable"
     assert info["dirty"] == "unknown"
 
 
@@ -859,7 +872,7 @@ def test_host_memory_parses_swap_without_losing_decimals(monkeypatch) -> None:
             return SimpleNamespace(stdout=SWAP_SPACED)
         return SimpleNamespace(stdout="")
 
-    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    monkeypatch.setattr(host_capacity.subprocess, "run", fake_run)
     m = bench._host_memory()
     assert m["total_gb"] == 64.0
     assert m["swap_total_gb"] == 5.0
@@ -875,7 +888,7 @@ def test_host_memory_parses_swap_regardless_of_spacing_around_equals(monkeypatch
     all, so it is the one that actually pins the behaviour.
     """
     monkeypatch.setattr(
-        bench.subprocess,
+        host_capacity.subprocess,
         "run",
         lambda argv, **k: SimpleNamespace(
             stdout=(
@@ -893,7 +906,7 @@ def test_host_memory_parses_swap_regardless_of_spacing_around_equals(monkeypatch
 def test_host_memory_degrades_to_none_when_sysctl_is_unavailable(monkeypatch) -> None:
     """No sysctl must produce None values, never a fabricated zero."""
     monkeypatch.setattr(
-        bench.subprocess, "run", lambda a, **k: (_ for _ in ()).throw(OSError("no sysctl"))
+        host_capacity.subprocess, "run", lambda a, **k: (_ for _ in ()).throw(OSError("no sysctl"))
     )
     m = bench._host_memory()
     assert m["total_gb"] is None

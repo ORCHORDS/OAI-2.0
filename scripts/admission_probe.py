@@ -68,7 +68,6 @@ import json
 import math
 import platform
 import statistics
-import subprocess
 import sys
 import threading
 import time
@@ -98,6 +97,7 @@ from oai2.runtime.llamacpp_runtime import (  # noqa: E402
     LlamaServerError,
     LlamaServerRuntime,
 )
+from oai2.verification.reproducibility import source_identity  # noqa: E402
 
 #: Short-answer cases. Small outputs keep decode time down so the measurement
 #: reflects queueing and prefill -- the resources admission actually governs --
@@ -163,31 +163,17 @@ class ArmResult:
 
 
 def harness_identity() -> dict[str, str]:
-    """Record the exact source revision that produced the artifact."""
-    info = {"commit": "unavailable:OSError", "branch": "unknown", "dirty": "unknown"}
-    try:
-        head = subprocess.run(  # noqa: S603
-            ["git", "rev-parse", "HEAD"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        branch = subprocess.run(  # noqa: S603
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        status = subprocess.run(  # noqa: S603
-            ["git", "status", "--porcelain"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        info = {"commit": head, "branch": branch, "dirty": "true" if status else "false"}
-    except OSError, subprocess.SubprocessError:
-        pass
-    return info
+    """Record the exact source revision that produced the artifact.
+
+    Delegates to the single owner in ``oai2.verification.reproducibility``
+    rather than running git here. Four private copies of this is a provenance
+    scheme nobody can change safely. The old copy also anchored git at the
+    *current working directory*: git walks up to find a repository, so running
+    the script from a subdirectory was fine, but running it from anywhere
+    outside the tree recorded ``commit: "unavailable:OSError"`` for a perfectly
+    healthy repository. The shared owner anchors at the repository root.
+    """
+    return source_identity(cwd=str(Path(__file__).resolve().parents[1])).as_dict()
 
 
 def _scorer(case_id: str) -> tuple[Any, ...]:
