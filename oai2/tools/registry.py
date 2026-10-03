@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -222,6 +223,12 @@ class ExecutionOutcome:
     ok: bool
     output: str
     error: str | None = None
+    # Measured by :func:`execute_tool`, which is the single funnel every tool
+    # passes through. It used to default to 0.0 and no handler ever assigned
+    # it, so every tool call -- including a `bash` that slept for thirty
+    # seconds -- reported a fabricated 0.0 ms. A latency statistic over tool
+    # results was a perfect zero, indistinguishable from never having
+    # measured. Handlers leave it alone; the funnel fills it in.
     elapsed_ms: float = 0.0
     #: Number of candidate files whose contents this tool could NOT read.
     #: A non-zero value means the tool did not look at everything it set out
@@ -437,6 +444,7 @@ def execute_tool(
     # Tool ids are matched case-insensitively so the model-emitted
     # ``"Read"`` and the registry's ``"read"`` agree.
     name = str(call.tool_id).lower()
+    started = time.perf_counter()
     if name == "read":
         outcome = _read(
             str(args.get("path", "")),
@@ -483,7 +491,7 @@ def execute_tool(
         ok=outcome.ok,
         output=outcome.output,
         error=outcome.error,
-        elapsed_ms=outcome.elapsed_ms,
+        elapsed_ms=(time.perf_counter() - started) * 1000.0,
     )
 
 

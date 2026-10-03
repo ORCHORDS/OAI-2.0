@@ -416,3 +416,77 @@ def test_grep_scoped_tool_is_denied_when_the_root_is_out_of_scope(workspace) -> 
                                       "path": str(workspace / "outside")}),
                   calls_used=0)
     assert out.stage.value == "deny"
+
+
+class TestToolElapsedTimeIsMeasuredNotFabricated:
+    """`elapsed_ms` must be a measurement, not a default nobody set.
+
+    `ExecutionOutcome.elapsed_ms` defaulted to `0.0` and no handler ever
+    assigned it, so `execute_tool` copied a fabricated `0.0` into
+    `ToolResult.elapsed_ms` for every single call. A `bash` that slept for
+    thirty seconds and a `true` that returned instantly were
+    indistinguishable, and any latency statistic computed over tool results
+    was a perfect zero -- the same value a never-measured system would
+    report.
+
+    `execute_tool` is the single funnel every tool passes through, so that is
+    where the measurement is taken; handlers leave the field alone.
+    """
+
+    def test_a_slow_tool_call_reports_a_slow_elapsed_time(self, tmp_path) -> None:
+        """The defect, stated as a contradiction that cannot both hold.
+
+        Before the fix both calls returned exactly 0.0, so this assertion
+        held only by accident of a zero default.
+        """
+        slow = execute_tool(
+            ToolCall(id="c1", tool_id=ToolId("bash"), arguments={"command": "sleep 0.4"}),
+            cwd=tmp_path,
+        )
+        assert slow.ok is True
+        assert slow.elapsed_ms > 100, (
+            f"a 400ms sleep reported elapsed_ms={slow.elapsed_ms}; the field "
+            f"is a default, not a measurement"
+        )
+
+    def test_elapsed_time_distinguishes_a_slow_call_from_a_fast_one(
+        self, tmp_path
+    ) -> None:
+        """Guard: a real distribution, not a constant.
+
+        Asserting only "not zero" would also pass a hardcoded 1.0. Ordering
+        is what a measurement guarantees and a constant cannot fake.
+        """
+        slow = execute_tool(
+            ToolCall(id="c1", tool_id=ToolId("bash"), arguments={"command": "sleep 0.3"}),
+            cwd=tmp_path,
+        )
+        fast = execute_tool(
+            ToolCall(id="c2", tool_id=ToolId("bash"), arguments={"command": "true"}),
+            cwd=tmp_path,
+        )
+        assert slow.elapsed_ms > fast.elapsed_ms
+        assert fast.elapsed_ms < 100
+
+    def test_a_failed_tool_call_is_also_timed(self, tmp_path) -> None:
+        """The measurement must not depend on the tool having succeeded.
+
+        Timing only the success path would leave the error path -- the one a
+        latency SLO cares about most -- reporting a fabricated zero again.
+        """
+        failed = execute_tool(
+            ToolCall(id="c1", tool_id=ToolId("read"), arguments={"path": "nope.py"}),
+            cwd=tmp_path,
+        )
+        assert failed.ok is False
+        assert failed.elapsed_ms > 0.0
+
+    def test_an_unsupported_tool_is_also_timed(self, tmp_path) -> None:
+        """The fallback branch goes through the same return, so it is timed."""
+        unsupported = execute_tool(
+            ToolCall(id="c1", tool_id=ToolId("nonexistent"), arguments={}),
+            cwd=tmp_path,
+        )
+        assert unsupported.ok is False
+        assert "unsupported tool" in (unsupported.error or "")
+        assert unsupported.elapsed_ms > 0.0
