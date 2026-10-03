@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from oai2.context import (
     ParserStatus,
     build_repository_graph,
@@ -121,3 +123,112 @@ def test_dirty_worktree_changes_snapshot_identity_even_when_head_is_unchanged(
     assert clean.identity.snapshot_id != dirty.identity.snapshot_id
     assert clean.identity.source_digest != dirty.identity.source_digest
     assert dirty.identity.dirty is True
+
+
+class TestWorkingTreeCleanlinessIsATriState:
+    """`dirty` must distinguish "clean" from "never measured".
+
+    `RepositoryIdentity` already modelled `git_revision` as `str | None`,
+    where `None` means the probe could not answer. `dirty` was a plain
+    `bool`, so a probe that never ran reported `False` -- the same value as
+    a genuinely clean tree -- and that value is hashed into `snapshot_id`.
+
+    A missing `git` binary, a corrupt index, a permissions problem and a
+    dubious-ownership refusal all make `git status` fail, and all four
+    produced a clean bill of health for a tree whose cleanliness had not
+    been established.
+    """
+
+    @staticmethod
+    def _git_repo(tmp_path: Path) -> None:
+        _write(tmp_path, "module.py", "VALUE = 1\n")
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "add", "module.py"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "-c",
+                "user.email=test@example.test",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-qm",
+                "initial",
+            ],
+            check=True,
+        )
+
+    @staticmethod
+    def _with_status_exit(monkeypatch: pytest.MonkeyPatch, code: int):
+        """Force `git status` to exit `code` while leaving everything else real."""
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN202
+            result = real_run(cmd, **kwargs)
+            if "status" in cmd:
+                return subprocess.CompletedProcess(
+                    cmd, code, result.stdout, result.stderr
+                )
+            return result
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def test_a_failed_status_probe_is_not_reported_as_clean(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._git_repo(tmp_path)
+        self._with_status_exit(monkeypatch, 128)
+        graph = build_repository_graph(tmp_path)
+        assert graph.identity.dirty is None
+        assert graph.identity.dirty is not False
+
+    def test_a_failed_probe_does_not_collide_with_a_clean_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The consequence that made this worth fixing.
+
+        `snapshot_id` is a digest over `{git_revision, dirty, source_digest}`.
+        With `dirty` fabricated to `False`, a source state whose cleanliness
+        was never measured produced the SAME identity as a genuinely clean
+        one, so two different real states were indistinguishable by id.
+        """
+        self._git_repo(tmp_path)
+        clean = build_repository_graph(tmp_path)
+        clean_id = clean.identity.snapshot_id
+
+        self._with_status_exit(monkeypatch, 128)
+        unmeasured = build_repository_graph(tmp_path)
+
+        assert unmeasured.identity.git_revision == clean.identity.git_revision
+        assert unmeasured.identity.source_digest == clean.identity.source_digest
+        assert unmeasured.identity.snapshot_id != clean_id, (
+            "an unmeasurable working tree collided with a genuinely clean one"
+        )
+
+    def test_a_missing_git_binary_is_not_reported_as_clean(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+            raise OSError("git not found")
+
+        monkeypatch.setattr(subprocess, "run", boom)
+        graph = build_repository_graph(tmp_path)
+        assert graph.identity.dirty is None
+        assert graph.identity.git_revision is None
+
+    def test_opposite_direction_a_clean_tree_is_still_false(
+        self, tmp_path: Path
+    ) -> None:
+        """Guard: a real measurement must still be reported as a measurement."""
+        self._git_repo(tmp_path)
+        assert build_repository_graph(tmp_path).identity.dirty is False
+
+    def test_opposite_direction_a_dirty_tree_is_still_true(
+        self, tmp_path: Path
+    ) -> None:
+        """Guard, and the case the tri-state must not swallow."""
+        self._git_repo(tmp_path)
+        _write(tmp_path, "module.py", "VALUE = 2\n")
+        assert build_repository_graph(tmp_path).identity.dirty is True

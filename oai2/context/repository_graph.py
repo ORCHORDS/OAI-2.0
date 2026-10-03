@@ -92,7 +92,10 @@ class RepositoryIdentity:
 
     root: str
     git_revision: str | None
-    dirty: bool
+    # Tri-state on purpose, matching ``git_revision``: ``None`` means the
+    # working tree was never measured, which is NOT the same as clean. See
+    # :func:`_git_metadata`.
+    dirty: bool | None
     source_digest: str
     snapshot_id: str
 
@@ -659,7 +662,21 @@ def _looks_like_test(path: str) -> bool:
     return "tests" in parts or name.startswith("test_") or name.endswith("_test.py")
 
 
-def _git_metadata(root: Path) -> tuple[str | None, bool]:
+def _git_metadata(root: Path) -> tuple[str | None, bool | None]:
+    """Return ``(revision, dirty)`` for ``root``.
+
+    ``dirty`` is a tri-state, matching ``revision`` in the same tuple:
+    ``True``/``False`` when ``git status`` ran and answered, and ``None`` when
+    it never could. A missing ``git`` binary, a corrupt index, a permissions
+    problem or a dubious-ownership refusal all make the probe fail, and
+    reporting ``False`` for those says "this working tree is clean" about a
+    tree whose cleanliness was never established.
+
+    That matters more than usual here because the value is hashed into
+    ``snapshot_id``: an unmeasurable source state and a genuinely clean one
+    produced the same identity input, so a snapshot could claim to describe a
+    clean tree on the strength of a probe that failed.
+    """
     try:
         revision_result = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
@@ -674,7 +691,8 @@ def _git_metadata(root: Path) -> tuple[str | None, bool]:
             text=True,
         )
     except OSError:
-        return None, False
+        return None, None
     revision = revision_result.stdout.strip() if revision_result.returncode == 0 else None
-    dirty = status_result.returncode == 0 and bool(status_result.stdout.strip())
+    # None, not False, when the probe could not run: see the docstring.
+    dirty = bool(status_result.stdout.strip()) if status_result.returncode == 0 else None
     return revision, dirty
