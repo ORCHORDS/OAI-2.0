@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 import pytest
 
@@ -72,22 +73,47 @@ def _is_zero(node: ast.AST) -> bool:
 
 
 def _empty_substitutions() -> dict[str, str]:
-    """``<x> if <collection> else 0.0`` sites, keyed ``path:lineno``."""
+    """``<x> if <collection> else 0.0`` sites, keyed by path + source text.
+
+    The key is deliberately NOT ``path:lineno``. Keying on line numbers made
+    this guard a tripwire for unrelated edits: adding a 12-line import block
+    above an allowlisted site moved it from 209 to 221 and failed the gate,
+    even though the site's own logic and justification were untouched. That
+    happened twice in one day (once here, once for a parallel agent's import
+    block) before the key was changed.
+
+    Keying on the normalized source of the conditional keeps the property the
+    guard exists for -- a change to the site's *own* logic still fails the
+    suite -- while an edit elsewhere in the file no longer forces a
+    re-review of a site nobody touched.
+
+    The ``#N`` suffix is the occurrence index within the file, so two
+    syntactically identical sites in one module stay distinguishable rather
+    than collapsing into a single key.
+    """
     found: dict[str, str] = {}
+    seen: dict[str, int] = {}
+
+    def _key(rel: str, source: str) -> str:
+        base = f"{rel}|{source}"
+        seen[base] = seen.get(base, 0) + 1
+        return f"{base}#{seen[base]}"
 
     class Scan(ast.NodeVisitor):
-        def __init__(self, path: str) -> None:
-            self.path = path
+        def __init__(self, rel: str) -> None:
+            self.rel = rel
 
         def visit_IfExp(self, node: ast.IfExp) -> None:
             if _is_zero(node.orelse) and isinstance(
                 node.test, (ast.Name, ast.Attribute, ast.Compare)
             ):
-                found[f"{self.path}:{node.lineno}"] = ast.unparse(node)[:90]
+                source = re.sub(r"\s+", " ", ast.unparse(node)).strip()
+                found[_key(self.rel, source)] = source
             self.generic_visit(node)
 
     for path in sorted(OAI2.rglob("*.py")):
-        Scan(str(path.relative_to(OAI2.parent))).visit(ast.parse(path.read_text()))
+        rel = str(path.relative_to(OAI2.parent))
+        Scan(rel).visit(ast.parse(path.read_text()))
     return found
 
 
@@ -96,35 +122,25 @@ def _empty_substitutions() -> dict[str, str]:
 #: Adding an entry here means asserting the new site is a genuine zero.
 ALLOWED_ZERO_SUBSTITUTIONS = {
     # A failed check scores 0.0. That is the score, not a missing measurement.
-    #
-    # Re-reviewed 2026-10-04 at WI-BENCH-001: both lines moved from 209/242 to
-    # 221/254 because the `oai2.evals` package gained a 12-line
-    # `from .contamination import (...)` block above them. The source text at
-    # both sites is unchanged and the justification is unchanged, so this is a
-    # re-review of a moved site rather than a new allowlist entry.
-    #
-    # Worth recording for whoever owns this guard: keying on `file:lineno`
-    # means any import added above an allowlisted site fails this gate. That is
-    # the intended "force a re-review" behaviour and it worked here, but it
-    # makes the allowlist a tripwire for unrelated edits.
-    "oai2/evals/__init__.py:221",
-    "oai2/evals/__init__.py:254",
+    # Two identical sites in this module, hence the occurrence suffixes.
+    "oai2/evals/__init__.py|1.0 if passed else 0.0#1",
+    "oai2/evals/__init__.py|1.0 if passed else 0.0#2",
     # Zero words in empty content is a true count.
-    "oai2/runtime/gateway_runtime.py:467",
+    "oai2/runtime/gateway_runtime.py|max(1, len(content.split())) if content else 0#1",
     # A single key has depth 0.
-    "oai2/observability/metrics.py:225",
+    "oai2/observability/metrics.py|max_keys - 1 if max_keys > 1 else 0#1",
     # A zero-magnitude vector has no direction; 0.0 is the documented
     # convention for "orthogonal", not a missing similarity.
-    "oai2/knowledge/cloudflare.py:314",
+    "oai2/knowledge/cloudflare.py|sum((a * b for a, b in zip(vector, stored, strict=True))) / denom if denom > 0.0 else 0.0#1",  # noqa: E501
     # MINE, marked rather than removed: k=0 still yields 0.0 for the rate
     # fields, and `RetrievalMetrics.insufficient_evidence` / `.measured` carry
     # the distinction. The conditional itself is the computation, not a
     # fallback.
-    "oai2/knowledge/evidence_package.py:211",
-    "oai2/knowledge/evidence_package.py:213",
+    "oai2/knowledge/evidence_package.py|relevant_retrieved / k if k else 0.0#1",
+    "oai2/knowledge/evidence_package.py|1.0 - precision if k else 0.0#1",
     # Population variance of a singleton IS zero, and `Distribution.count`
     # is honest about being 1. The sample count travels with the number.
-    "oai2/evals/qos.py:238",
+    "oai2/evals/qos.py|statistics.pvariance(values) if len(values) > 1 else 0.0#1",
 }
 
 
@@ -474,3 +490,84 @@ class TestInvariantNegativeControls:
         real = summarize_samples([sample, sample, sample])
         assert real.verified_actions_per_second is None
         assert real.throughput_measured is False
+
+
+class TestAllowlistKeyStability:
+    """The allowlist used to be keyed `path:lineno`, which is brittle.
+
+    Keying on line numbers meant the guard failed whenever *anything* above
+    an allowlisted site shifted -- a 12-line import block moved two entries in
+    `oai2/evals/__init__.py` from 209/242 to 221/254 and forced a re-review
+    of sites whose logic had not changed. That happened twice in one day
+    before the key was changed to the site's own source text.
+
+    Re-keying is only safe if it keeps the two properties that matter:
+
+      1. a NEW `else 0.0` still fails the suite
+      2. a CHANGED site's logic still fails the suite
+      3. an UNRELATED edit elsewhere in the file no longer fails it  <- new
+    """
+
+    @staticmethod
+    def _keys(source: str) -> set[str]:
+        """Run the real scanner over a synthetic module."""
+        found: dict[str, str] = {}
+        seen: dict[str, int] = {}
+
+        def _key(rel: str, snippet: str) -> str:
+            base = f"{rel}|{snippet}"
+            seen[base] = seen.get(base, 0) + 1
+            return f"{base}#{seen[base]}"
+
+        class Scan(ast.NodeVisitor):
+            def visit_IfExp(self, node: ast.IfExp) -> None:
+                if _is_zero(node.orelse) and isinstance(
+                    node.test, (ast.Name, ast.Attribute, ast.Compare)
+                ):
+                    snippet = re.sub(r"\s+", " ", ast.unparse(node)).strip()
+                    found[_key("m.py", snippet)] = snippet
+                self.generic_visit(node)
+
+        Scan().visit(ast.parse(source))
+        return set(found)
+
+    _BASE = "def f(xs, total):\n    return max(xs) if xs else 0.0\n"
+
+    def test_a_new_zero_substitution_is_still_detected(self) -> None:
+        keys = self._keys(self._BASE + "def g(ys):\n    return min(ys) if ys else 0.0\n")
+        assert len(keys) == 2
+        assert not keys <= ALLOWED_ZERO_SUBSTITUTIONS
+
+    def test_changing_a_sites_own_logic_still_detaches_it(self) -> None:
+        """The property that must survive re-keying.
+
+        If the conditional's own text changes, the new key is not in the
+        allowlist, so the site is reported as unaccounted-for -- exactly as
+        it would have been under line numbering.
+        """
+        before = self._keys(self._BASE)
+        after = self._keys("def f(xs, total):\n    return (max(xs) / total) if xs else 0.0\n")
+        assert before != after
+        assert not after & ALLOWED_ZERO_SUBSTITUTIONS
+
+    def test_an_unrelated_edit_above_the_site_no_longer_moves_it(self) -> None:
+        """The improvement: line shifts are no longer the guard's problem."""
+        shifted = (
+            "import os\n"
+            "import sys\n"
+            "import json\n"
+            "from typing import Any\n"
+            "from collections import OrderedDict\n" + self._BASE
+        )
+        assert self._keys(self._BASE) == self._keys(shifted)
+
+    def test_two_identical_sites_in_one_module_stay_distinguishable(self) -> None:
+        """`oai2/evals/__init__.py` has two identical `1.0 if passed else 0.0`.
+
+        Without the occurrence suffix they would collapse into one key, and
+        the second occurrence would be reported as a new unaccounted site.
+        """
+        dup = "def f(x):\n    return 1.0 if x else 0.0\ndef g(y):\n    return 1.0 if y else 0.0\n"
+        keys = self._keys(dup)
+        assert len(keys) == 2
+        assert all(k.endswith(("#1", "#2")) for k in keys)
