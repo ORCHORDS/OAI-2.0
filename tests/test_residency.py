@@ -409,13 +409,22 @@ def test_residency_accountant_summary_empty() -> None:
     assert summary.cancelled == 0
     assert summary.in_flight == 0
     assert summary.completed == 0
-    assert summary.mean_wait_ms == 0.0
-    assert summary.p50_wait_ms == 0.0
-    assert summary.p95_wait_ms == 0.0
-    assert summary.p99_wait_ms == 0.0
-    assert summary.max_wait_ms == 0.0
-    assert summary.mean_residency_ms == 0.0
-    assert summary.max_residency_ms == 0.0
+    # Latency statistics are None, not 0.0. Nothing was ever admitted, so
+    # there is no queue-wait or residency distribution to summarise. This used
+    # to assert a complete, flawless 0.0 profile -- mean, p50, p95, p99 and max
+    # for both -- out of a tracker that had never seen a request, in a summary
+    # that feeds promotion gates.
+    #
+    # `peak_used_memory_gb` stays 0.0 deliberately: that is a resource fact
+    # ("nothing was resident"), not a distributional claim about observations
+    # that were never taken.
+    assert summary.mean_wait_ms is None
+    assert summary.p50_wait_ms is None
+    assert summary.p95_wait_ms is None
+    assert summary.p99_wait_ms is None
+    assert summary.max_wait_ms is None
+    assert summary.mean_residency_ms is None
+    assert summary.max_residency_ms is None
     assert summary.peak_used_memory_gb == 0.0
     assert summary.peak_active_tasks == 0
     assert summary.peak_queue_depth == 0

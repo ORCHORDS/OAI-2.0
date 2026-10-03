@@ -102,13 +102,26 @@ class ResidencySummary:
     cancelled: int
     in_flight: int
     completed: int
-    mean_wait_ms: float
-    p50_wait_ms: float
-    p95_wait_ms: float
-    p99_wait_ms: float
-    max_wait_ms: float
-    mean_residency_ms: float
-    max_residency_ms: float
+    # Latency statistics are None when NOTHING was ever admitted, not 0.0.
+    #
+    # This summary feeds promotion gates. Before this change an accountant
+    # with total=0 reported mean/p50/p95/p99/max wait and residency all
+    # exactly 0.0 -- a complete, flawless latency profile produced by a
+    # tracker that had never observed a single request. A gate reading
+    # `p95_wait_ms == 0.0` from that would conclude the residency system's
+    # tail was perfect on the strength of an absence.
+    #
+    # This is the same failure closed in oai2/evals/qos.py, oai2/evals/
+    # truth_runner.py, oai2/model/numerical_compare.py and
+    # oai2/knowledge/evidence_package.py: an absent measurement must never
+    # render as a clean one.
+    mean_wait_ms: float | None
+    p50_wait_ms: float | None
+    p95_wait_ms: float | None
+    p99_wait_ms: float | None
+    max_wait_ms: float | None
+    mean_residency_ms: float | None
+    max_residency_ms: float | None
     peak_used_memory_gb: float
     peak_active_tasks: int
     peak_queue_depth: int
@@ -359,9 +372,11 @@ class ResidencyAccountant:
             p50_wait_ms=_percentile(wait_times, 50.0),
             p95_wait_ms=_percentile(wait_times, 95.0),
             p99_wait_ms=_percentile(wait_times, 99.0),
-            max_wait_ms=max(wait_times) if wait_times else 0.0,
+            max_wait_ms=max(wait_times) if wait_times else None,
             mean_residency_ms=_mean(residency_times),
-            max_residency_ms=max(residency_times) if residency_times else 0.0,
+            max_residency_ms=(
+                max(residency_times) if residency_times else None
+            ),
             peak_used_memory_gb=self._peak_used_memory_gb,
             peak_active_tasks=self._peak_active_tasks,
             peak_queue_depth=self._peak_queue_depth,
@@ -393,17 +408,30 @@ def _non_negative_int(value: object, name: str) -> int:
     return int(value)
 
 
-def _mean(values: list[float]) -> float:
+def _mean(values: list[float]) -> float | None:
+    """Mean of the observations, or None when there were none.
+
+    None, not 0.0. A 0.0 here is a claim that a queue wait was measured and
+    took no time; an accountant that has admitted nothing has measured
+    nothing. See the module note on absent measurements.
+    """
     if not values:
-        return 0.0
+        return None
     return float(statistics.fmean(values))
 
 
-def _percentile(values: list[float], percentile: float) -> float:
-    if not values:
-        return 0.0
+def _percentile(values: list[float], percentile: float) -> float | None:
+    """Percentile of the observations, or None when there were none.
+
+    The range check now runs BEFORE the emptiness check. It used to sit after
+    it, so ``_percentile([], 500.0)`` returned 0.0 instead of raising -- the
+    validation was silently skipped on exactly the path that returns a
+    fabricated number.
+    """
     if not 0.0 <= percentile <= 100.0:
         raise ValueError("percentile must be between 0 and 100")
+    if not values:
+        return None
     ordered = sorted(values)
     if len(ordered) == 1:
         return ordered[0]

@@ -79,10 +79,17 @@ class BatchSurfaceMetrics:
     batches_emitted: int
     requests_emitted: int
     last_batch_size: int
-    mean_batch_size: float
-    last_queue_wait_ms: float
-    mean_queue_wait_ms: float
-    max_queue_wait_ms: float
+    # Averages are None when the divisor was zero -- no batch emitted, no
+    # request executed -- because "the mean of no observations" is not 0.0,
+    # it is undefined. Reporting 0.0 produced a surface that had never served
+    # anything describing itself as a perfectly empty queue.
+    mean_batch_size: float | None
+    # None until the first request completes a queue wait. `last_*` fields
+    # describe the most recent observation, and there has not been one.
+    last_queue_wait_ms: float | None
+    mean_queue_wait_ms: float | None
+    # None until at least one request has waited.
+    max_queue_wait_ms: float | None
     active_sessions: int
 
 
@@ -140,9 +147,9 @@ class BatchInferenceSurface:
         self._batches_executed = 0
         self._requests_executed = 0
         self._total_batch_size = 0
-        self._last_queue_wait_ms = 0.0
+        self._last_queue_wait_ms: float | None = None
         self._total_queue_wait_ms = 0.0
-        self._max_queue_wait_ms = 0.0
+        self._max_queue_wait_ms: float | None = None
 
     def open_session(self, *, client_id: str, session_id: str) -> None:
         """Register a session in the registry and the lifecycle, or roll back."""
@@ -249,7 +256,14 @@ class BatchInferenceSurface:
         self._total_batch_size += batch_size
         self._total_queue_wait_ms += sum(waits)
         self._last_queue_wait_ms = waits[-1]
-        self._max_queue_wait_ms = max([self._max_queue_wait_ms, *waits])
+        # Seeded from the batch, not from a 0.0 sentinel. `max([None, *waits])`
+        # would not compare, and folding a 0.0 in would have made the maximum
+        # report 0.0 for a batch whose requests all waited -- the one value
+        # guaranteed to be impossible.
+        self._max_queue_wait_ms = (
+            max(waits) if self._max_queue_wait_ms is None
+            else max(self._max_queue_wait_ms, max(waits))
+        )
         return tuple(results)
 
     def metrics(self) -> BatchSurfaceMetrics:
@@ -264,9 +278,11 @@ class BatchInferenceSurface:
             batches_emitted=scheduler_metrics.batches_emitted,
             requests_emitted=scheduler_metrics.requests_emitted,
             last_batch_size=self._last_batch_size,
-            mean_batch_size=(self._total_batch_size / batches) if batches else 0.0,
+            mean_batch_size=(self._total_batch_size / batches) if batches else None,
             last_queue_wait_ms=self._last_queue_wait_ms,
-            mean_queue_wait_ms=(self._total_queue_wait_ms / executed) if executed else 0.0,
+            mean_queue_wait_ms=(
+                (self._total_queue_wait_ms / executed) if executed else None
+            ),
             max_queue_wait_ms=self._max_queue_wait_ms,
             active_sessions=self._lifecycle.health.active_sessions,
         )
