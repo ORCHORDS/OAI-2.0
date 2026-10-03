@@ -65,8 +65,24 @@ at 100% — and asserts the specific paths it matched.
 A `null` never satisfies a field (`test_a_null_value_does_not_satisfy_a_field`),
 so an artifact cannot pass by carrying `"commit": null`.
 
-## What this does not say
+## Re-running: why you will see 23.8%, not 25.0%
 
+`audit.json` is itself a JSON artifact under `evidence/`, so once it is
+committed the audit starts auditing its own output. A fresh run therefore sees
+8 artifacts, not 7, and reports **23.8%** rather than the 25.0% recorded here.
+
+`audit.json` scores 3/20 itself — `source.commit`, `source.branch`,
+`source.dirty`, and nothing else, which is correct: an audit report is not an
+inference measurement and carries no serving identity, no sampling policy and no
+environment. `(1.75 + 0.15) / 8 = 23.8%`.
+
+The 25.0% above is the measurement of the 7 pre-existing artifacts, which is
+what #176 is about. The self-reference is disclosed rather than excluded,
+because excluding it would be hiding a real property of the script. The
+per-field table is unchanged by this: the same seven fields are recorded by no
+artifact either way.
+
+## What this does not say
 - It does not re-run any measurement, and it does not check that a recorded
   value is *true*. A field can be present and wrong.
 - It does not say any artifact should be deleted. The point is that a partial
