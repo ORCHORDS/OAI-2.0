@@ -113,6 +113,27 @@ def default_dispatch_policy(
     both take a ``path`` and are scoped like ``Read``/``Edit``/``Write``. A
     host that wants its scopes to bind everything it admits should omit this
     and accept that ``Bash`` is then refused.
+
+    **The scopes do not bound what a shell can reach.** ``shell.exec`` is
+    granted unscoped by default, and ``Bash("cat ~/.ssh/id_rsa")`` carries no
+    path for the scope gate to test. ``resource_scopes`` constrains the
+    *path-taking* tools; it is not a sandbox around the agent as a whole. A
+    host that needs a real boundary should deny ``shell.exec``.
+
+    The defaults are ``{"./", "/tmp"}`` — the working directory the host
+    chose, and the shared temp area. They deliberately do **not** include the
+    user's home directory. The home directory holds the credentials that
+    matter most on a developer machine (``.ssh/id_rsa``,
+    ``.aws/credentials``, ``.config/gh/hosts.yml``, cloud and registry
+    tokens), and admitting it wholesale means the default policy authorises
+    reading and overwriting every one of them on behalf of a model. That is
+    not a permissive default, it is the absence of one.
+
+    A host that genuinely wants home-directory access — an interactive coding
+    assistant, say — can still ask for it, but it now has to be said out
+    loud::
+
+        default_dispatch_policy(resource_scopes=["./", "~/"])
     """
     if allow_capabilities is None:
         allow_capabilities = {"fs.read", "fs.write", "fs.list", "shell.exec"}
@@ -121,7 +142,7 @@ def default_dispatch_policy(
     return DispatchPolicy(
         allow_capabilities=frozenset(allow_capabilities),
         deny_capabilities=frozenset(),
-        resource_scopes=frozenset(resource_scopes or {"./", "/tmp", "/Users/orchords"}),
+        resource_scopes=frozenset(resource_scopes or {"./", "/tmp"}),
         allow_unscoped_capabilities=frozenset(allow_unscoped_capabilities),
         budget_calls=budget_calls,
         high_impact_approved=True,

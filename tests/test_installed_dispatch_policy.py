@@ -20,6 +20,8 @@ fixed, so these assert the corrected semantics:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from oai2.agents.agent_loop import default_dispatch_policy
@@ -48,7 +50,28 @@ def installed(tmp_path):
 
 
 def test_default_policy_scopes_are_roots() -> None:
-    assert default_dispatch_policy().resource_scopes == frozenset({"./", "/tmp", "/Users/orchords"})
+    assert default_dispatch_policy().resource_scopes == frozenset({"./", "/tmp"})
+
+
+def test_default_policy_does_not_admit_the_home_directory() -> None:
+    """The default must not authorise the user's credentials.
+
+    ``~/.ssh/id_rsa``, ``~/.aws/credentials`` and ``.config/gh/hosts.yml``
+    are all reachable by absolute path, and ``fs.write`` is in the default
+    allow list, so a home-directory scope root means the model can both read
+    and overwrite every one of them. That was the shipped default until this
+    was fixed; see #240.
+
+    The scope list is asserted structurally here as well as behaviourally in
+    ``TestHomeDirectoryIsNotAdmittedByDefault`` so a future re-introduction
+    cannot pass by making the check structural-only or behavioural-only.
+    """
+    scopes = default_dispatch_policy().resource_scopes
+    home = str(Path.home())
+    for scope in scopes:
+        assert not (scope == home or scope == "~/"), (
+            f"default scope {scope!r} admits the home directory"
+        )
 
 
 def test_concrete_file_under_a_scope_root_is_allowed(installed, tmp_path) -> None:
@@ -221,3 +244,126 @@ def test_scoped_tool_with_no_path_argument_is_denied(tmp_path) -> None:
     )
     d = ToolDispatcher(registry=default_tool_definitions(), policy=policy, cwd=tmp_path)
     assert d.check(_call("Read", {}), calls_used=0).stage is DispatchStage.DENY
+
+
+class TestHomeDirectoryIsNotAdmittedByDefault:
+    """The behavioural half of the home-directory fix.
+
+    The structural assertion above checks the scope list. These check what
+    that scope list actually *does* to a real ``Read``/``Write`` under the
+    policy the agent loop installs, because a scope entry that looks safe and
+    a scope entry that admits the file are not the same claim.
+    """
+
+    @staticmethod
+    def _canary() -> Path:
+        """A harmless stand-in for the credential files that live at home.
+
+        Named to mirror the real thing so the test reads honestly, and it
+        holds no secret. The directory is created under the real home
+        directory because that is the only place the regression can occur;
+        putting it in tmp_path would not test the default scopes at all.
+        """
+        d = Path.home() / ".oai2-test-canary"
+        d.mkdir(exist_ok=True)
+        return d
+
+    def test_read_under_the_home_directory_is_denied_by_default(self, tmp_path) -> None:
+        canary = self._canary() / "id_rsa"
+        canary.write_text("CANARY-NOT-A-REAL-KEY\n", encoding="utf-8")
+        try:
+            d = ToolDispatcher(
+                registry=default_tool_definitions(),
+                policy=default_dispatch_policy(),
+                cwd=tmp_path,
+            )
+            call = ToolCall(
+                id="c1",
+                tool_id=ToolId("Read"),
+                arguments={"path": str(canary)},
+            )
+            decision = d.check(call, calls_used=0)
+        finally:
+            canary.unlink()
+
+        assert decision.stage is DispatchStage.DENY
+        assert "out of scope" in decision.reason
+
+    def test_write_under_the_home_directory_is_denied_by_default(self, tmp_path) -> None:
+        """``fs.write`` is in the default allow list, so read-only would not
+        be enough — overwriting a key is as bad as reading one."""
+        canary = self._canary() / "id_rsa"
+        canary.write_text("CANARY-NOT-A-REAL-KEY\n", encoding="utf-8")
+        try:
+            d = ToolDispatcher(
+                registry=default_tool_definitions(),
+                policy=default_dispatch_policy(),
+                cwd=tmp_path,
+            )
+            call = ToolCall(
+                id="c1",
+                tool_id=ToolId("Write"),
+                arguments={"path": str(canary), "content": "overwritten"},
+            )
+            decision = d.check(call, calls_used=0)
+        finally:
+            canary.unlink()
+
+        assert decision.stage is DispatchStage.DENY
+
+    def test_the_working_directory_still_works(self, tmp_path) -> None:
+        """The control: narrowing the default must not break the agent.
+
+        ``./`` is the host-chosen working directory; the loop has to be able
+        to read the project it was pointed at.
+        """
+        target = tmp_path / "app.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        d = ToolDispatcher(
+            registry=default_tool_definitions(),
+            policy=default_dispatch_policy(),
+            cwd=tmp_path,
+        )
+        decision = d.check(
+            ToolCall(id="c1", tool_id=ToolId("Read"), arguments={"path": "app.py"}),
+            calls_used=0,
+        )
+        assert decision.stage is DispatchStage.EXECUTE
+
+    def test_a_host_may_still_opt_in_to_home_access_explicitly(
+        self, tmp_path
+    ) -> None:
+        """Not a removal of the capability — a change of who decides.
+
+        An interactive coding assistant may genuinely want ``~/`` in scope.
+        It now has to say so, which is the whole point.
+        """
+        canary = self._canary() / "id_rsa"
+        canary.write_text("CANARY-NOT-A-REAL-KEY\n", encoding="utf-8")
+        try:
+            d = ToolDispatcher(
+                registry=default_tool_definitions(),
+                policy=default_dispatch_policy(resource_scopes=["./", str(Path.home())]),
+                cwd=tmp_path,
+            )
+            decision = d.check(
+                ToolCall(id="c1", tool_id=ToolId("Read"), arguments={"path": str(canary)}),
+                calls_used=0,
+            )
+        finally:
+            canary.unlink()
+
+        assert decision.stage is DispatchStage.EXECUTE
+
+    def test_shell_is_unscoped_and_the_docs_do_not_claim_otherwise(self) -> None:
+        """Pin the honest limit of the scope gate.
+
+        ``shell.exec`` carries no path, so ``Bash("cat ~/.ssh/id_rsa")``
+        passes gate 4 whatever the scopes say. The fix therefore does not
+        rest on the scopes being a sandbox, and the docstring now says so.
+        If someone later removes the unscoped-shell grant, this test should be
+        updated deliberately rather than silently passing.
+        """
+        assert "shell.exec" in default_dispatch_policy().allow_unscoped_capabilities
+        doc = default_dispatch_policy.__doc__ or ""
+        assert "do not bound what a shell can reach" in doc
