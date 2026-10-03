@@ -1,0 +1,625 @@
+{
+  "generated_at": "2026-10-03T22:08:13.880327+00:00",
+  "issue": 176,
+  "harness": {
+    "commit": "0fc3bd61907faad1fea76924348363f505d33b93",
+    "branch": "main",
+    "dirty": "false"
+  },
+  "audited_root": "evidence",
+  "required_fields": [
+    {
+      "name": "source.commit",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "harness.commit",
+        "harness.source_sha",
+        "source.commit"
+      ]
+    },
+    {
+      "name": "source.branch",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "harness.branch",
+        "source.branch"
+      ]
+    },
+    {
+      "name": "source.dirty",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "harness.dirty",
+        "source.dirty"
+      ]
+    },
+    {
+      "name": "model.endpoint",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "serving_identity.base_url",
+        "serving_identity.endpoint",
+        "model.endpoint",
+        "result.backend"
+      ]
+    },
+    {
+      "name": "model.alias",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "serving_identity.model_alias",
+        "model.alias"
+      ]
+    },
+    {
+      "name": "model.path",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "serving_identity.model_path",
+        "model.model_path",
+        "model.path"
+      ]
+    },
+    {
+      "name": "model.digest",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "serving_identity.weights_sha256",
+        "serving_identity.model_sha256",
+        "model.weights_sha256",
+        "model.model_sha256"
+      ]
+    },
+    {
+      "name": "model.quantization",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "serving_identity.model_ftype",
+        "serving_identity.quantization",
+        "model.model_ftype",
+        "model.quantization"
+      ]
+    },
+    {
+      "name": "model.backend",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "serving_identity.build_info",
+        "serving_identity.backend",
+        "model.build_info",
+        "model.backend"
+      ]
+    },
+    {
+      "name": "model.total_slots",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "serving_identity.total_slots",
+        "model.total_slots"
+      ]
+    },
+    {
+      "name": "model.n_ctx",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "serving_identity.n_ctx",
+        "model.n_ctx"
+      ]
+    },
+    {
+      "name": "sampling.mode",
+      "requirement": "REQ-DET-021",
+      "probes": [
+        "sampling.mode"
+      ]
+    },
+    {
+      "name": "sampling.seed",
+      "requirement": "REQ-DET-021",
+      "probes": [
+        "sampling.seed",
+        "parameters.seed"
+      ]
+    },
+    {
+      "name": "sampling.temperature",
+      "requirement": "REQ-DET-021",
+      "probes": [
+        "sampling.temperature",
+        "parameters.temperature"
+      ]
+    },
+    {
+      "name": "corpus.suite",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "suite_id",
+        "suite.suite_id",
+        "workload"
+      ]
+    },
+    {
+      "name": "corpus.revision",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "revision.revision_id",
+        "suite.revision_id",
+        "suites[].revision_id"
+      ]
+    },
+    {
+      "name": "corpus.scorer",
+      "requirement": "REQ-DET-022",
+      "probes": [
+        "scorer",
+        "scorer_version",
+        "suite.scorer"
+      ]
+    },
+    {
+      "name": "environment.host",
+      "requirement": "REQ-DET-023",
+      "probes": [
+        "environment.platform",
+        "host.platform",
+        "machine",
+        "host_memory_start.platform"
+      ]
+    },
+    {
+      "name": "environment.python",
+      "requirement": "REQ-DET-023",
+      "probes": [
+        "environment.python",
+        "python_version",
+        "host.python"
+      ]
+    },
+    {
+      "name": "environment.tool_snapshots",
+      "requirement": "REQ-DET-023",
+      "probes": [
+        "environment.tool_snapshot_refs",
+        "tool_snapshot_refs",
+        "tool_snapshots"
+      ]
+    }
+  ],
+  "artifacts_scanned": 7,
+  "artifacts_readable": 7,
+  "artifacts_unreadable": 0,
+  "mean_coverage": 0.25,
+  "fully_reproducible": [],
+  "per_field_presence": {
+    "source.commit": {
+      "present_in": 6,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json"
+      ]
+    },
+    "source.branch": {
+      "present_in": 4,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "source.dirty": {
+      "present_in": 6,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json"
+      ]
+    },
+    "model.endpoint": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "model.alias": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "model.path": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "model.digest": {
+      "present_in": 1,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/accuracy/deterministic_hard_12_a133744.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "model.quantization": {
+      "present_in": 0,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/accuracy/deterministic_hard_12_a133744.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "model.backend": {
+      "present_in": 0,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/accuracy/deterministic_hard_12_a133744.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "model.total_slots": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "model.n_ctx": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "sampling.mode": {
+      "present_in": 0,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/accuracy/deterministic_hard_12_a133744.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "sampling.seed": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "sampling.temperature": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "corpus.suite": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "corpus.revision": {
+      "present_in": 0,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/accuracy/deterministic_hard_12_a133744.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "corpus.scorer": {
+      "present_in": 2,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "environment.host": {
+      "present_in": 0,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/accuracy/deterministic_hard_12_a133744.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "environment.python": {
+      "present_in": 0,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/accuracy/deterministic_hard_12_a133744.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    },
+    "environment.tool_snapshots": {
+      "present_in": 0,
+      "readable_total": 7,
+      "missing_from": [
+        "evidence/accuracy/cache_invalidation_probe.json",
+        "evidence/accuracy/deterministic_hard_12_a133744.json",
+        "evidence/admission/admission_probe_b7399ae.json",
+        "evidence/contamination/audit_4fb4112.json",
+        "evidence/governance/eval_governance_ac23ce2.json",
+        "evidence/numerical/backend_noran_58b5d1b0e429.json",
+        "evidence/numerical/tolerance_matrix_87d35007693d.json"
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "label": "evidence/accuracy/cache_invalidation_probe.json",
+      "unreadable": null,
+      "coverage_ratio": 0.0,
+      "present": {},
+      "missing": [
+        "source.commit",
+        "source.branch",
+        "source.dirty",
+        "model.endpoint",
+        "model.alias",
+        "model.path",
+        "model.digest",
+        "model.quantization",
+        "model.backend",
+        "model.total_slots",
+        "model.n_ctx",
+        "sampling.mode",
+        "sampling.seed",
+        "sampling.temperature",
+        "corpus.suite",
+        "corpus.revision",
+        "corpus.scorer",
+        "environment.host",
+        "environment.python",
+        "environment.tool_snapshots"
+      ]
+    },
+    {
+      "label": "evidence/accuracy/deterministic_hard_12_a133744.json",
+      "unreadable": null,
+      "coverage_ratio": 0.6,
+      "present": {
+        "source.commit": "harness.commit",
+        "source.branch": "harness.branch",
+        "source.dirty": "harness.dirty",
+        "model.endpoint": "serving_identity.base_url",
+        "model.alias": "serving_identity.model_alias",
+        "model.path": "serving_identity.model_path",
+        "model.total_slots": "serving_identity.total_slots",
+        "model.n_ctx": "serving_identity.n_ctx",
+        "sampling.seed": "sampling.seed",
+        "sampling.temperature": "sampling.temperature",
+        "corpus.suite": "suite_id",
+        "corpus.scorer": "scorer"
+      },
+      "missing": [
+        "model.digest",
+        "model.quantization",
+        "model.backend",
+        "sampling.mode",
+        "corpus.revision",
+        "environment.host",
+        "environment.python",
+        "environment.tool_snapshots"
+      ]
+    },
+    {
+      "label": "evidence/admission/admission_probe_b7399ae.json",
+      "unreadable": null,
+      "coverage_ratio": 0.3,
+      "present": {
+        "source.commit": "harness.commit",
+        "source.branch": "harness.branch",
+        "source.dirty": "harness.dirty",
+        "sampling.seed": "parameters.seed",
+        "sampling.temperature": "parameters.temperature",
+        "corpus.suite": "workload"
+      },
+      "missing": [
+        "model.endpoint",
+        "model.alias",
+        "model.path",
+        "model.digest",
+        "model.quantization",
+        "model.backend",
+        "model.total_slots",
+        "model.n_ctx",
+        "sampling.mode",
+        "corpus.revision",
+        "corpus.scorer",
+        "environment.host",
+        "environment.python",
+        "environment.tool_snapshots"
+      ]
+    },
+    {
+      "label": "evidence/contamination/audit_4fb4112.json",
+      "unreadable": null,
+      "coverage_ratio": 0.15,
+      "present": {
+        "source.commit": "harness.commit",
+        "source.branch": "harness.branch",
+        "source.dirty": "harness.dirty"
+      },
+      "missing": [
+        "model.endpoint",
+        "model.alias",
+        "model.path",
+        "model.digest",
+        "model.quantization",
+        "model.backend",
+        "model.total_slots",
+        "model.n_ctx",
+        "sampling.mode",
+        "sampling.seed",
+        "sampling.temperature",
+        "corpus.suite",
+        "corpus.revision",
+        "corpus.scorer",
+        "environment.host",
+        "environment.python",
+        "environment.tool_snapshots"
+      ]
+    },
+    {
+      "label": "evidence/governance/eval_governance_ac23ce2.json",
+      "unreadable": null,
+      "coverage_ratio": 0.2,
+      "present": {
+        "source.commit": "harness.commit",
+        "source.branch": "harness.branch",
+        "source.dirty": "harness.dirty",
+        "corpus.scorer": "scorer_version"
+      },
+      "missing": [
+        "model.endpoint",
+        "model.alias",
+        "model.path",
+        "model.digest",
+        "model.quantization",
+        "model.backend",
+        "model.total_slots",
+        "model.n_ctx",
+        "sampling.mode",
+        "sampling.seed",
+        "sampling.temperature",
+        "corpus.suite",
+        "corpus.revision",
+        "environment.host",
+        "environment.python",
+        "environment.tool_snapshots"
+      ]
+    },
+    {
+      "label": "evidence/numerical/backend_noran_58b5d1b0e429.json",
+      "unreadable": null,
+      "coverage_ratio": 0.4,
+      "present": {
+        "source.commit": "harness.source_sha",
+        "source.dirty": "harness.dirty",
+        "model.endpoint": "serving_identity.base_url",
+        "model.alias": "serving_identity.model_alias",
+        "model.path": "serving_identity.model_path",
+        "model.digest": "serving_identity.weights_sha256",
+        "model.total_slots": "serving_identity.total_slots",
+        "model.n_ctx": "serving_identity.n_ctx"
+      },
+      "missing": [
+        "source.branch",
+        "model.quantization",
+        "model.backend",
+        "sampling.mode",
+        "sampling.seed",
+        "sampling.temperature",
+        "corpus.suite",
+        "corpus.revision",
+        "corpus.scorer",
+        "environment.host",
+        "environment.python",
+        "environment.tool_snapshots"
+      ]
+    },
+    {
+      "label": "evidence/numerical/tolerance_matrix_87d35007693d.json",
+      "unreadable": null,
+      "coverage_ratio": 0.1,
+      "present": {
+        "source.commit": "harness.source_sha",
+        "source.dirty": "harness.dirty"
+      },
+      "missing": [
+        "source.branch",
+        "model.endpoint",
+        "model.alias",
+        "model.path",
+        "model.digest",
+        "model.quantization",
+        "model.backend",
+        "model.total_slots",
+        "model.n_ctx",
+        "sampling.mode",
+        "sampling.seed",
+        "sampling.temperature",
+        "corpus.suite",
+        "corpus.revision",
+        "corpus.scorer",
+        "environment.host",
+        "environment.python",
+        "environment.tool_snapshots"
+      ]
+    }
+  ],
+  "scope": "Measures whether each committed evidence artifact carries the metadata a reproduction needs (REQ-DET-021/022/023). It does not re-run any measurement, does not verify that a recorded value is true, and does not judge whether an artifact should exist."
+}

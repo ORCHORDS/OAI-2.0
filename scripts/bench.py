@@ -67,7 +67,6 @@ import json
 import math
 import platform
 import statistics
-import subprocess
 import sys
 import threading
 import time
@@ -78,6 +77,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from oai2.runtime.host_capacity import read_host_memory
+from oai2.verification.reproducibility import source_identity
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import httpx
@@ -229,42 +229,20 @@ def _harness_identity() -> dict[str, str]:
     them. A throughput number without the harness SHA that produced it is not
     evidence, so every summary carries this block. Failure to read git is
     reported, never silently omitted.
+
+    Delegates to the single owner in ``oai2.verification.reproducibility``;
+    this was the fourth private copy of the same three fields.
+
+    One behaviour changed, deliberately: ``dirty`` used to be scoped to this
+    file alone (``git status --porcelain -- scripts/bench.py``), so editing any
+    other tracked file still reported ``dirty: "false"`` — a clean tree that was
+    not clean. It is now whole-tree state, which is the stricter reading and
+    the one the SHA actually implies.
     """
-    info = {"source": "scripts/bench.py"}
-    try:
-        root = Path(__file__).resolve().parents[1]
-        info["commit"] = (
-            subprocess.run(  # noqa: S603
-                ["git", "-C", str(root), "rev-parse", "HEAD"],  # noqa: S607
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=True,
-            ).stdout.strip()
-            or "unknown"
-        )
-        dirty = subprocess.run(  # noqa: S603
-            ["git", "-C", str(root), "status", "--porcelain", "--", "scripts/bench.py"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=True,
-        ).stdout.strip()
-        info["dirty"] = "true" if dirty else "false"
-        info["branch"] = (
-            subprocess.run(  # noqa: S603
-                ["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],  # noqa: S607
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=True,
-            ).stdout.strip()
-            or "unknown"
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        info["commit"] = f"unavailable:{type(exc).__name__}"
-        info["dirty"] = "unknown"
-    return info
+    return {
+        "source": "scripts/bench.py",
+        **source_identity(cwd=str(Path(__file__).resolve().parents[1])).as_dict(),
+    }
 
 
 def _build_prompt(target_tokens: int) -> tuple[str, int]:

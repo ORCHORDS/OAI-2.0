@@ -41,6 +41,7 @@ from oai2.evals.contamination import (  # noqa: E402
     fingerprint_cases,
     select_clean_cases,
 )
+from oai2.verification.reproducibility import source_identity  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -55,30 +56,15 @@ MAX_BYTES = 2_000_000
 
 
 def harness_identity() -> dict[str, str]:
-    info = {"commit": "unavailable:OSError", "branch": "unknown", "dirty": "unknown"}
-    try:
-        head = subprocess.run(  # noqa: S603
-            ["git", "rev-parse", "HEAD"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        status = subprocess.run(  # noqa: S603
-            ["git", "status", "--porcelain"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        branch = subprocess.run(  # noqa: S603
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        info = {"commit": head, "branch": branch, "dirty": "true" if status else "false"}
-    except OSError, subprocess.SubprocessError:
-        pass
-    return info
+    """Delegate to the single provenance owner in ``oai2.verification``.
+
+    The previous private copy anchored git at the *current working directory*.
+    Git walks up to find a repository, so a subdirectory was fine, but running
+    this script from outside the tree recorded ``commit:
+    "unavailable:OSError"`` for a healthy repository. The shared owner anchors
+    at the repository root instead.
+    """
+    return source_identity(cwd=str(REPO)).as_dict()
 
 
 def iter_corpus() -> Iterator[CorpusEntry]:
