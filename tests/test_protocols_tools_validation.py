@@ -955,3 +955,80 @@ def test_module_source_does_not_use_unittest_mock() -> None:
 
     assert "unittest.mock" not in _MODULE_SOURCE
     assert "import unittest" not in _MODULE_SOURCE
+
+
+class TestToolResultErrorMatchesOk:
+    """`ok` and `error` must agree, as they already do on the knowledge transport.
+
+    `knowledge/transport.py` enforces "successful response must not contain
+    error" and "failed response requires error" on its sibling response
+    shape. `ToolResult` enforced neither, so both states a caller most needs
+    to tell apart were constructible -- and `_format_tool_result`, the only
+    renderer, branches on `result.ok` alone:
+
+        ToolResult(call_id="c1", ok=True, output="", error="exit 1")
+          accepted; the model is shown '' and the error is dropped, so a
+          FAILED call arrives as an empty SUCCESS
+
+        ToolResult(call_id="c1", ok=False, error=None)
+          accepted; the model is shown 'ERROR: unknown failure' -- a failure
+          whose cause was never measured
+
+    The second is an absent measurement rendered as a definite one; the first
+    is a leak rendered as success.
+    """
+
+    def test_a_successful_result_may_not_carry_an_error(self) -> None:
+        with pytest.raises(ValidationError, match="must not contain error"):
+            ToolResult(call_id="c1", ok=True, output="", error="exit 1")
+
+    def test_a_failed_result_requires_an_error(self) -> None:
+        with pytest.raises(ValidationError, match="requires error"):
+            ToolResult(call_id="c1", ok=False, error=None)
+
+    def test_opposite_direction_a_well_formed_success_is_accepted(self) -> None:
+        """Guard: the common case must not be made harder to construct."""
+        tr = ToolResult(call_id="c1", ok=True, output="file contents")
+        assert tr.ok is True
+        assert tr.error is None
+
+    def test_opposite_direction_a_well_formed_failure_is_accepted(self) -> None:
+        tr = ToolResult(call_id="c1", ok=False, error="timeout")
+        assert tr.ok is False
+        assert tr.error == "timeout"
+
+    def test_opposite_direction_a_failure_may_still_carry_partial_output(self) -> None:
+        """Guard: `output` is deliberately NOT constrained on the failure path.
+
+        A tool that produced partial output before failing has something real
+        to report, and forbidding it would push producers toward dropping the
+        output or inventing a fake success to carry it. The knowledge
+        transport forbids the analogous combination because there is no
+        meaningful partial object; here there is.
+        """
+        tr = ToolResult(call_id="c1", ok=False, output="wrote 3 of 10 files", error="disk full")
+        assert tr.ok is False
+        assert tr.output == "wrote 3 of 10 files"
+
+    def test_the_model_cannot_be_shown_a_failure_as_a_success(self) -> None:
+        """End-to-end: the rendering the agent loop performs.
+
+        Asserted on the constructed states, not on a stub, because the
+        defect was that the bad state existed at all -- a renderer fix alone
+        would leave it constructible by the next producer.
+        """
+        from oai2.agents.agent_loop import _format_tool_result
+
+        assert _format_tool_result(
+            ToolResult(call_id="c1", ok=True, output="file contents")
+        ) == "file contents"
+        assert _format_tool_result(
+            ToolResult(call_id="c1", ok=False, error="timeout")
+        ) == "ERROR: timeout"
+        # And the two states that used to be reachable cannot be built at all.
+        for kwargs in (
+            {"ok": True, "output": "", "error": "exit 1"},
+            {"ok": False, "error": None},
+        ):
+            with pytest.raises(ValidationError):
+                ToolResult(call_id="c1", **kwargs)  # type: ignore[arg-type]

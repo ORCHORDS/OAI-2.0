@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..core import ToolId
 
@@ -95,7 +95,30 @@ class ToolCall(BaseModel):
 
 
 class ToolResult(BaseModel):
-    """A response from the host after running a tool."""
+    """A response from the host after running a tool.
+
+    ``ok`` and ``error`` are cross-checked, matching the rule the knowledge
+    transport already enforces on its sibling response shape
+    (``knowledge/transport.py``): "successful response must not contain
+    error" and "failed response requires error".
+
+    Without that check the two states a caller most needs to tell apart were
+    both constructible, and the model could not tell them apart either. The
+    only renderer, ``agents.agent_loop._format_tool_result``, branches on
+    ``result.ok`` alone:
+
+        ToolResult(call_id="c1", ok=True, output="", error="exit 1")
+          -> accepted; the model is shown '' and the error is dropped, so a
+             FAILED call arrives as an empty SUCCESS
+        ToolResult(call_id="c1", ok=False, error=None)
+          -> accepted; the model is shown 'ERROR: unknown failure', a
+             failure whose cause was never measured
+
+    Both are the "absence reads as clean" shape: the second is an absent
+    measurement, the first is a leak rendered as success. `output` is
+    deliberately NOT constrained on the failure path, because partial output
+    from a failed call is legitimate to report.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -104,6 +127,14 @@ class ToolResult(BaseModel):
     output: Any = None
     error: str | None = None
     elapsed_ms: float = Field(default=0.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def _check_error_matches_ok(self) -> ToolResult:
+        if self.ok and self.error is not None:
+            raise ValueError("successful tool result must not contain error")
+        if not self.ok and self.error is None:
+            raise ValueError("failed tool result requires error")
+        return self
 
 
 __all__ = [
