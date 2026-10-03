@@ -83,6 +83,9 @@ def wait_ready(base_url: str, proc: subprocess.Popen[bytes], timeout: float) -> 
     while time.perf_counter() < deadline:
         if proc.poll() is not None:
             raise RuntimeError(f"replica exited early with code {proc.returncode}")
+        # PEP 758, not Python 2: unparenthesised multiple exception types,
+        # valid from Python 3.14 (`requires-python = ">=3.14"`). Only an
+        # `as` clause still needs the parentheses. Left as-is deliberately.
         try:
             with urllib.request.urlopen(f"{base_url}/props", timeout=2) as r:
                 if r.status == 200:
