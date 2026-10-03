@@ -24,6 +24,8 @@ The instances, by commit:
     f309d81  agents/learning        _dedup_check must not swallow
     29430da  evals/qos              evaluate_promotion correctness gate
     b5b7e83  agents/learning        extract_lesson finished_reason
+    4b900c9  evals/qos              verified_actions_per_second
+    8e0d2a1  tools/registry         _grep unreadable_count
 
 Adding a new instance means adding a test here, so the next occurrence of
 this class has somewhere to be recorded rather than becoming a new
@@ -58,6 +60,7 @@ from oai2.model.numerical_compare import (
 )
 from oai2.model.numerics import NumericalOperation
 from oai2.model.tolerance_matrix import canonical_policy
+from oai2.tools import registry
 
 
 def _identity() -> NumericalArtifactIdentity:
@@ -438,3 +441,55 @@ def test_the_repository_actually_contains_these_instances() -> None:
     for name in ("has_errors", "errored_suite_ids"):
         assert hasattr(evals.HarnessReport, name), name
     assert hasattr(nc.NumericalComparison, "capability_measured")
+    assert hasattr(qos.WorkloadReport, "throughput_measured")
+    assert hasattr(registry.ExecutionOutcome, "coverage_complete")
+
+
+# --------------------------------------------------------------------------
+# 8e0d2a1 -- a grep that could not read a file reported a completed search
+# --------------------------------------------------------------------------
+
+
+def test_a_grep_that_skipped_files_is_distinguishable_from_a_clean_one(
+    tmp_path,
+) -> None:
+    """A file that could not be read is a file that was not searched.
+
+    This instance is recorded here rather than only in the tool registry's
+    own tests because the sibling scanner cannot see it: the AST sweep in
+    ``test_absent_measurement_invariant`` looks for an empty *collection*
+    being substituted with ``0.0``, and this defect is a swallowed exception
+    inside a loop. Different mechanism, same question -- could a reader tell,
+    from this record alone, whether the search covered what it looked at?
+    """
+    import os
+
+    from oai2.tools.registry import _grep
+
+    (tmp_path / "clean.py").write_text("x = 1\n")
+    locked = tmp_path / "locked.py"
+    locked.write_text("def needle_function():\n    pass\n")
+    os.chmod(locked, 0o000)
+    try:
+        partial = _grep(
+            "needle_function", path_str=str(tmp_path), include_glob=None, cwd=tmp_path
+        )
+    finally:
+        os.chmod(locked, 0o644)
+
+    complete_root = tmp_path / "complete"
+    complete_root.mkdir()
+    (complete_root / "clean.py").write_text("x = 1\n")
+    complete = _grep(
+        "needle_function", path_str=str(complete_root), include_glob=None, cwd=complete_root
+    )
+
+    # The defect: both were ok, and both said "(no matches)". Only one of
+    # them had actually looked.
+    assert partial.ok is complete.ok is True
+    assert partial.output != complete.output
+    assert partial.coverage_complete is False
+    assert partial.unreadable_count == 1
+    assert complete.coverage_complete is True
+    assert complete.unreadable_count == 0
+    assert complete.output == "(no matches)"

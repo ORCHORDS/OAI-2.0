@@ -223,6 +223,18 @@ class ExecutionOutcome:
     output: str
     error: str | None = None
     elapsed_ms: float = 0.0
+    #: Number of candidate files whose contents this tool could NOT read.
+    #: A non-zero value means the tool did not look at everything it set out
+    #: to look at, so a successful outcome must not be read as "the whole
+    #: corpus was searched and nothing was found". Distinct from an
+    #: intentional exclusion (a path outside the authorised root), which is a
+    #: deliberate scope decision rather than a failed read.
+    unreadable_count: int = 0
+
+    @property
+    def coverage_complete(self) -> bool:
+        """Whether every candidate file in scope was actually read."""
+        return self.unreadable_count == 0
 
 
 def _resolve(path_str: str, *, cwd: Path) -> Path:
@@ -360,6 +372,7 @@ def _grep(pattern: str, *, path_str: str, include_glob: str | None, cwd: Path) -
             # the resolved form.
             files = list(root.rglob(include_glob)) if include_glob else list(root.rglob("*"))
         lines: list[str] = []
+        unreadable = 0
         for fp in files:
             if not fp.is_file():
                 continue
@@ -374,6 +387,11 @@ def _grep(pattern: str, *, path_str: str, include_glob: str | None, cwd: Path) -
             try:
                 content = resolved.read_text(encoding="utf-8", errors="replace")
             except Exception:
+                # A file we could not read is a file we did not search. The
+                # exclusion just above is a deliberate scope decision; this is
+                # a failed read, so it is counted rather than dropped and the
+                # outcome can report that the sweep was incomplete.
+                unreadable += 1
                 continue
             for lineno, line in enumerate(content.splitlines(), start=1):
                 if rx.search(line):
@@ -384,9 +402,20 @@ def _grep(pattern: str, *, path_str: str, include_glob: str | None, cwd: Path) -
             if len(lines) >= 200:
                 lines.append("... (truncated)")
                 break
+        # A search that skipped files is not a search that found nothing.
+        # Reporting "(no matches)" either way tells a reader the corpus was
+        # searched when part of it was never opened, which is how a tool ends
+        # up asserting that a symbol does not exist.
+        note = (
+            f"[{unreadable} file(s) could not be read; this search is incomplete]"
+            if unreadable
+            else ""
+        )
         if not lines:
-            return ExecutionOutcome(True, "(no matches)")
-        return ExecutionOutcome(True, "\n".join(lines))
+            return ExecutionOutcome(True, f"(no matches) {note}".strip(), unreadable_count=unreadable)
+        if note:
+            lines.append(note)
+        return ExecutionOutcome(True, "\n".join(lines), unreadable_count=unreadable)
     except Exception as exc:  # pragma: no cover
         return ExecutionOutcome(False, "", f"{type(exc).__name__}: {exc}")
 
