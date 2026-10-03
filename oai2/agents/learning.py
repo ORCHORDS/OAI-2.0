@@ -122,12 +122,19 @@ def extract_lesson(
     - ``status = IMPLEMENTED`` only when the run completed; otherwise
       ``EXPERIMENTAL`` so the caller can re-verify before promoting.
     """
-    finished = bool(agent_run.final_text) and agent_run.finished_reason in {
-        "stop",
-        "tool_calls",
-        "length",
-        None,
-    }
+    # A run counts as finished only if it actually finished. "length" means
+    # the model was truncated mid-generation; "tool_calls" is what is left
+    # when the loop exhausts max_steps still asking for tools; None means the
+    # reason was never recorded. All three are "not finished", and admitting
+    # them meant an unfinished run produced an IMPLEMENTED lesson whose content
+    # asserts "verified lesson from task_id=...". Measured on f309d81, a real
+    # AgentLoop with max_steps=3 and a runtime that always requested a tool
+    # call: 3 steps, 3 tool calls, finished_reason="tool_calls", and
+    # status=IMPLEMENTED. The docstring above already says IMPLEMENTED is
+    # "only when the run completed", so this makes the code match it.
+    # Conservative in the right direction: an unverified run is EXPERIMENTAL
+    # and the caller re-verifies, which is what that status is for.
+    finished = bool(agent_run.final_text) and agent_run.finished_reason == "stop"
     steps = len(agent_run.steps) if hasattr(agent_run, "steps") else 0
     tool_calls = getattr(agent_run, "total_tool_calls", 0)
     content = (

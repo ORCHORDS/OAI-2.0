@@ -492,3 +492,120 @@ class TestAFailedDedupCheckIsNotACleanResult:
             dedup_against=store,
         )
         assert existing in getattr(obj, "_dedup_conflicts", ())
+
+
+class TestOnlyACompletedRunBecomesAnImplementedLesson:
+    """The docstring says IMPLEMENTED is "only when the run completed".
+
+    The check admitted `"length"`, `"tool_calls"` and `None` alongside
+    `"stop"`:
+
+        finished = bool(final_text) and finished_reason in {
+            "stop", "tool_calls", "length", None,
+        }
+
+    None of those three means the run finished. `"length"` is a model
+    truncated mid-generation; `"tool_calls"` is what remains when the loop
+    exhausts `max_steps` still requesting tools; `None` means the reason was
+    never recorded at all. Each produced an IMPLEMENTED lesson whose content
+    asserts `verified lesson from task_id=...`.
+
+    Note the `final_text` in these cases is deliberately NON-empty. The
+    pre-existing `test_extract_lesson_unfinished_run_is_experimental` passes
+    `final_text=""`, so `bool(final_text)` is False and the reason allowlist
+    is never exercised -- deleting the whole reason check would leave it
+    green.
+    """
+
+    @pytest.mark.parametrize(
+        "reason", ["tool_calls", "length", None, "error", "cancelled"]
+    )
+    def test_an_unfinished_run_is_experimental(self, reason: str | None) -> None:
+        run = _make_run(
+            user_prompt="refactor the module",
+            final_text="here is a partial answer",
+            finished_reason=reason,
+        )
+        obj = extract_lesson(
+            run,
+            task_id=f"t-unfinished-{reason}",
+            verification_ref="verifier://sess-unfinished",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+        )
+        assert obj.status is Status.EXPERIMENTAL, (
+            f"finished_reason={reason!r} is not a completed run, but the "
+            f"lesson was marked {obj.status}"
+        )
+
+    def test_opposite_direction_a_stopped_run_is_still_implemented(self) -> None:
+        """Guard: the real completed case must not be demoted."""
+        run = _make_run(
+            user_prompt="refactor the module", final_text="done", finished_reason="stop"
+        )
+        obj = extract_lesson(
+            run,
+            task_id="t-stopped",
+            verification_ref="verifier://sess-stopped",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+        )
+        assert obj.status is Status.IMPLEMENTED
+
+    def test_opposite_direction_a_stopped_run_with_no_text_is_experimental(
+        self,
+    ) -> None:
+        """Guard: the other half of the conjunction still applies."""
+        run = _make_run(user_prompt="x", final_text="", finished_reason="stop")
+        obj = extract_lesson(
+            run,
+            task_id="t-stopped-empty",
+            verification_ref="verifier://sess-stopped-empty",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+        )
+        assert obj.status is Status.EXPERIMENTAL
+
+    def test_a_loop_that_exhausts_max_steps_is_not_a_completed_run(self) -> None:
+        """End-to-end: the real AgentLoop, not a hand-built AgentRun.
+
+        The shape under test is not hypothetical. A runtime that keeps
+        requesting tool calls runs the loop out of `max_steps`; the loop only
+        breaks on `"stop"`, so the run ends with `finished_reason="tool_calls"`
+        and a truthy `final_text` taken from the last step. Before the fix
+        that produced an IMPLEMENTED lesson.
+        """
+
+        @dataclass
+        class _AlwaysCallsTool(InferenceRuntime):
+            STATUS = Status.EXPERIMENTAL
+
+            def generate(self, request: InferenceRequest) -> InferenceResponse:
+                return InferenceResponse(
+                    text="still working on it",
+                    tokens=5,
+                    elapsed_ms=1.0,
+                    device="cpu",
+                    status=Status.EXPERIMENTAL,
+                    finish_reason="tool_calls",
+                    tool_calls=(
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "noop", "arguments": "{}"},
+                        },
+                    ),
+                )
+
+        run = AgentLoop(runtime=_AlwaysCallsTool(), max_steps=3).run("do the work")
+        assert run.finished_reason != "stop", "the run was expected to be unfinished"
+        assert run.final_text, "the run was expected to carry a truthy final_text"
+
+        obj = extract_lesson(
+            run,
+            task_id="t-loop-exhausted",
+            verification_ref="verifier://sess-loop-exhausted",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+        )
+        assert obj.status is Status.EXPERIMENTAL
