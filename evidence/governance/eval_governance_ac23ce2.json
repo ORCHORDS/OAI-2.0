@@ -1,0 +1,170 @@
+{
+  "issue": 172,
+  "harness": {
+    "commit": "ac23ce2c4f2d9c2215c10229c25657d904ea8751",
+    "branch": "main",
+    "dirty": "false"
+  },
+  "scorer_version": "regex_or@2026-10-04",
+  "policy": {
+    "shingle_size": 3,
+    "near_overlap_threshold": 0.6
+  },
+  "corpus_files": 89,
+  "corpus_dirs": [
+    "evidence",
+    "docs",
+    "evals"
+  ],
+  "suites": [
+    {
+      "suite_id": "abstention",
+      "revision": "fa704671d9df425ed685a5bd2fd934b4",
+      "suite_content": "abstention_basic",
+      "capability": "abstention",
+      "scorer": "regex_all",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 1,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "bug_diagnosis",
+      "revision": "18266f6cbf978de1eb7e08bb6386f423",
+      "suite_content": "bug_diagnosis_basic",
+      "capability": "bug_diagnosis",
+      "scorer": "regex_or",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 2,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "coding",
+      "revision": "e23b089ab2e1b69589e5d24b106a510b",
+      "suite_content": "coding_basic",
+      "capability": "coding",
+      "scorer": "regex_or",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 3,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "conflicting_evidence",
+      "revision": "fc290d552700438f94a369b0e84bf355",
+      "suite_content": "conflicting_evidence_basic",
+      "capability": "conflicting_evidence",
+      "scorer": "regex_all",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 1,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "deterministic_hard",
+      "revision": "95b991d3b6dc7b3e55d038cdad8da26c",
+      "suite_content": "deterministic_hard_12",
+      "capability": "deterministic_hard",
+      "scorer": "regex_or",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 12,
+      "audit_status": "findings",
+      "finding_count": 12,
+      "quarantined_case_ids": [
+        "arithmetic_multistep",
+        "boolean_logic",
+        "capital_city",
+        "count_letter_in_word",
+        "days_in_a_week",
+        "distinct_letter_count",
+        "geometric_sequence",
+        "leap_year_length",
+        "modular_arithmetic",
+        "rate_word_problem",
+        "string_reversal",
+        "unit_conversion"
+      ]
+    },
+    {
+      "suite_id": "multi_file_reasoning",
+      "revision": "cee898ded312df79a5737b038a394380",
+      "suite_content": "multi_file_reasoning_basic",
+      "capability": "multi_file_reasoning",
+      "scorer": "regex_all",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 1,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "orchestration",
+      "revision": "c07a285a46ef70b561ee24b6180f1fff",
+      "suite_content": "orchestration_basic",
+      "capability": "orchestration",
+      "scorer": "regex_or",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 1,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "reasoning",
+      "revision": "8c8e1a1da83bbb87ae9563e96e5f9116",
+      "suite_content": "reasoning_basic",
+      "capability": "reasoning",
+      "scorer": "regex_or",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 2,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "tool_use",
+      "revision": "d345d7a18d1b0b37a9767bfe39c3fd58",
+      "suite_content": "tool_use_action_tokens",
+      "capability": "tool_use",
+      "scorer": "regex_or",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 3,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "verification",
+      "revision": "1b9dc74c8b80328c1955b85f41d7b41c",
+      "suite_content": "verification_taxonomy",
+      "capability": "verification",
+      "scorer": "regex_or",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 1,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    },
+    {
+      "suite_id": "vision",
+      "revision": "caefc130a20c570254f372403112037c",
+      "suite_content": "vision_basic",
+      "capability": "vision",
+      "scorer": "regex_or",
+      "scorer_version": "regex_or@2026-10-04",
+      "case_count": 1,
+      "audit_status": "clean",
+      "finding_count": 0,
+      "quarantined_case_ids": []
+    }
+  ],
+  "distinct_revisions": 11,
+  "suites_blocked_by_audit": [
+    "deterministic_hard"
+  ]
+}
