@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 from fastapi.testclient import TestClient
 
-from oai2.runtime.inference import InferenceRequest, InferenceResponse, InferenceRuntime
+from oai2.core import Status
+from oai2.runtime.inference import (
+    InferenceRequest,
+    InferenceResponse,
+    InferenceRuntime,
+    PlaceholderRuntime,
+)
 from oai2.runtime.scheduler import SafeBatchScheduler
 from oai2.runtime.service import ServiceCompatibility, ServiceLifecycle, ServiceState
 from oai2.runtime.service_binding import BatchInferenceSurface, create_batch_inference_app
@@ -271,7 +279,14 @@ def test_protocol_routes_require_bearer_and_bind_scheduler() -> None:
         payload = drained.json()["results"]
         assert len(payload) == 1
         assert payload[0]["request_id"] == "r-1"
-        assert payload[0]["status"] == "IMPLEMENTED"
+        # This used to assert "IMPLEMENTED", which was the defect: the
+        # assertion two lines below proves the runtime is a PlaceholderRuntime
+        # (its literal output format contains "prompt_len="), and no weights
+        # were loaded. `drain()` hardcoded Status.IMPLEMENTED and discarded
+        # `InferenceResponse.status`, so a placeholder result was reported to
+        # the client as implemented. The two assertions together now say what
+        # is true: this is a placeholder run, and it is labelled as one.
+        assert payload[0]["status"] == "EXPERIMENTAL"
         assert "prompt_len=5" in payload[0]["text"]
 
         metrics = client.get("/v1/batches/metrics", headers=headers).json()
@@ -285,3 +300,88 @@ def test_protocol_routes_require_bearer_and_bind_scheduler() -> None:
         assert closed.json()["closed"] is True
 
     assert lifecycle.state is ServiceState.STOPPED
+
+
+class TestDrainCarriesTheRuntimesOwnStatus:
+    """`drain()` must forward `InferenceResponse.status`, not replace it.
+
+    `drain()` hardcoded `Status.IMPLEMENTED`, discarding the field the
+    runtime populated. The visible symptom was a `PlaceholderRuntime` -- the
+    default when `runtime=None`, and the runtime that loads no weights --
+    being reported to the client as `"implemented"`.
+
+    Asserted with a runtime that reports a status *different from* the one the
+    placeholder does, so this proves the value is carried through in both
+    directions. A test using only the placeholder would still pass if
+    `drain()` had swapped in a hardcoded EXPERIMENTAL, which would be the
+    same defect wearing a truthful hat.
+    """
+
+    @dataclass
+    class _StubRuntime(InferenceRuntime):
+        reports: Status
+
+        def generate(self, request: InferenceRequest) -> InferenceResponse:
+            return InferenceResponse(
+                text="stub output",
+                tokens=2,
+                elapsed_ms=1.0,
+                device="cpu",
+                status=self.reports,
+            )
+
+    @staticmethod
+    def _drained_status(reports: Status) -> Status:
+        lifecycle = ServiceLifecycle(expected=_compat())
+        lifecycle.start(_compat())
+        surface = BatchInferenceSurface(
+            lifecycle=lifecycle,
+            scheduler=SafeBatchScheduler(),
+            registry=IsolatedSessionRegistry(),
+            runtime=TestDrainCarriesTheRuntimesOwnStatus._StubRuntime(reports),
+            clock=_ScriptClock(),
+        )
+        surface.open_session(client_id="c1", session_id="s-1")
+        surface.submit(
+            client_id="c1",
+            session_id="s-1",
+            request_id="r-1",
+            prompt="hello",
+            **_key_kwargs(),
+        )
+        results = surface.drain()
+        assert len(results) == 1
+        return results[0].status
+
+    @pytest.mark.parametrize("status", [Status.PROPOSED, Status.EXPERIMENTAL, Status.IMPLEMENTED])
+    def test_the_runtimes_status_is_forwarded_verbatim(self, status: Status) -> None:
+        assert self._drained_status(status) is status
+
+    def test_a_placeholder_is_not_reported_as_implemented(self) -> None:
+        """The original defect, stated directly.
+
+        `PlaceholderRuntime` is what `create_batch_inference_app` installs when
+        no runtime is supplied, and it reports EXPERIMENTAL with the note
+        "placeholder runtime -- no model loaded". Reporting that as
+        IMPLEMENTED told the client a model had run when none had.
+        """
+        lifecycle = ServiceLifecycle(expected=_compat())
+        lifecycle.start(_compat())
+        surface = BatchInferenceSurface(
+            lifecycle=lifecycle,
+            scheduler=SafeBatchScheduler(),
+            registry=IsolatedSessionRegistry(),
+            clock=_ScriptClock(),
+        )
+        assert isinstance(surface._runtime, PlaceholderRuntime)  # noqa: SLF001
+        surface.open_session(client_id="c1", session_id="s-1")
+        surface.submit(
+            client_id="c1",
+            session_id="s-1",
+            request_id="r-1",
+            prompt="hello",
+            **_key_kwargs(),
+        )
+        results = surface.drain()
+        assert results[0].status is Status.EXPERIMENTAL
+        assert results[0].status is not Status.IMPLEMENTED
