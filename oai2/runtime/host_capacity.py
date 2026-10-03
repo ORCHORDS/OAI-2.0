@@ -63,6 +63,12 @@ def _run(argv: list[str]) -> str | None:
             timeout=_COMMAND_TIMEOUT_SECONDS,
             check=True,
         )
+    # `except A, B:` without parentheses is NOT Python 2 syntax here. It is
+    # PEP 758, unparenthesised multiple exception types, valid from Python
+    # 3.14 — and pyproject declares `requires-python = ">=3.14"`. Only an
+    # `as` clause still requires the parentheses. Left as-is deliberately:
+    # it reads as a SyntaxError to anyone pattern-matching Python 2, and
+    # "fixing" it would be an unexplained churn.
     except OSError, subprocess.SubprocessError:
         return None
     return completed.stdout.strip()

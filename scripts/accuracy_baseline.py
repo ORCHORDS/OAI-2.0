@@ -105,6 +105,9 @@ def git(*args: str) -> str | None:
             timeout=10,
             check=True,
         ).stdout.strip()
+    # PEP 758, not Python 2: unparenthesised multiple exception types,
+        # valid from Python 3.14 (`requires-python = ">=3.14"`). Only an
+        # `as` clause still needs the parentheses. Left as-is deliberately.
     except OSError, subprocess.SubprocessError:
         return None
 
