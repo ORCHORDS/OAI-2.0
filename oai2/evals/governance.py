@@ -58,6 +58,7 @@ from enum import StrEnum
 
 from .contamination import (
     ContaminationPolicy,
+    ContaminationReport,
     CorpusEntry,
     check_contamination,
     fingerprint_cases,
@@ -385,6 +386,7 @@ def evaluate_governed_promotion(
     training_case_ids: set[str] | frozenset[str],
     candidate_abstention_accuracy: float,
     candidate_false_success_rate: float,
+    contamination: ContaminationReport,
 ) -> GovernedPromotionEvaluation:
     """Gate a promotion on comparability and audit status first (REQ-BENCH-024).
 
@@ -392,6 +394,11 @@ def evaluate_governed_promotion(
     any number is compared. Only if all of them pass does the decision delegate
     to :func:`oai2.evals.regression.evaluate_held_out_promotion`, unchanged --
     there is still one promotion gate, not two.
+
+    Corpus contamination is checked in the same pre-comparison pass, because it
+    is the same kind of fact: a regression measured across a contaminated
+    held-out set is not a regression, and comparing first would lend the
+    invalid evidence a number before the refusal arrived.
     """
     failures: list[str] = []
 
@@ -402,6 +409,9 @@ def evaluate_governed_promotion(
             comparability=ComparabilityCheck(False, ("missing_records",)),
             inner=None,
         )
+
+    if not contamination.clean:
+        failures.extend(f"contamination:{kind}" for kind in contamination.kinds())
 
     baseline_revisions = {record.revision.revision_id for record in baseline_records}
     candidate_revisions = {record.revision.revision_id for record in candidate_records}
@@ -428,6 +438,7 @@ def evaluate_governed_promotion(
         training_case_ids=training_case_ids,
         candidate_abstention_accuracy=candidate_abstention_accuracy,
         candidate_false_success_rate=candidate_false_success_rate,
+        contamination=contamination,
     )
     return GovernedPromotionEvaluation(
         passed=inner.passed,

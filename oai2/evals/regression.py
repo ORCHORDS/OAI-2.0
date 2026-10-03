@@ -11,6 +11,8 @@ import math
 from dataclasses import dataclass
 from typing import Protocol
 
+from .contamination import ContaminationReport
+
 
 class CapabilityScoreLike(Protocol):
     case_id: str
@@ -78,6 +80,10 @@ class HeldOutPromotionEvaluation:
     passed: bool
     failures: tuple[str, ...]
     capability_regressions: tuple[CapabilityRegression, ...]
+    #: Held-out case IDs the contamination audit quarantined. Non-empty means
+    #: the corpus this decision rests on was measured as contaminated, so the
+    #: record has to say which cases rather than only that it failed.
+    quarantined_case_ids: tuple[str, ...] = ()
 
 
 def evaluate_held_out_promotion(
@@ -88,8 +94,22 @@ def evaluate_held_out_promotion(
     training_case_ids: set[str] | frozenset[str],
     candidate_abstention_accuracy: float,
     candidate_false_success_rate: float,
+    contamination: ContaminationReport,
 ) -> HeldOutPromotionEvaluation:
-    """Evaluate a candidate against baseline on isolated held-out cases."""
+    """Evaluate a candidate against baseline on isolated held-out cases.
+
+    Isolation is established two ways, and both are required. `training_case_ids`
+    is the cheap identity check; `contamination` is the content check that
+    identity cannot substitute for. A caller must supply both — `contamination`
+    is a required keyword rather than an optional one precisely because an
+    optional audit is an audit that can be omitted, which puts this gate back
+    where it started.
+
+    A contaminated corpus fails the gate before any regression is computed.
+    `quarantined_case_ids` on the result names the cases, so a caller can swap
+    in clean ones (see :func:`~oai2.evals.contamination.select_clean_cases`) and
+    re-run rather than having to re-derive which cases were at fault.
+    """
     abstention = _rate(candidate_abstention_accuracy, "candidate_abstention_accuracy")
     false_success = _rate(candidate_false_success_rate, "candidate_false_success_rate")
 
@@ -106,6 +126,27 @@ def evaluate_held_out_promotion(
     if overlap:
         joined = ", ".join(sorted(overlap))
         raise ValueError(f"held-out cases overlap training/tuning inputs: {joined}")
+
+    # A case ID being absent from `training_case_ids` says nothing about the
+    # case being unseen. Renaming a training case makes it "held out" while
+    # its text is byte-identical, and the ID check above passes cleanly. The
+    # repository already measures this (REQ-BENCH-012/013) and has measured
+    # the shipped deterministic_hard suite as fully contaminated, so an audit
+    # that is not consulted here is an audit whose result cannot change the
+    # promotion decision.
+    #
+    # Fails rather than raises, and refuses BEFORE any regression is computed:
+    # a regression measured across a contaminated corpus is not a regression,
+    # and reporting one would lend the invalid evidence a number.
+    if not contamination.clean:
+        kinds = contamination.kinds() or ("unknown",)
+        return HeldOutPromotionEvaluation(
+            budget_version=budget.version,
+            passed=False,
+            failures=tuple(f"contamination:{kind}" for kind in kinds),
+            capability_regressions=(),
+            quarantined_case_ids=contamination.quarantined_case_ids,
+        )
 
     _validate_report_numbers(baseline_reports, "baseline")
     _validate_report_numbers(candidate_reports, "candidate")

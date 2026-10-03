@@ -19,12 +19,20 @@ easy to assert and easy to get wrong, so the controls here are the point:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import asdict
+from types import SimpleNamespace
 
 import pytest
 
 from oai2.evals import CapabilityCase, CapabilitySuite
-from oai2.evals.contamination import ContaminationPolicy, CorpusEntry
+from oai2.evals.contamination import (
+    ContaminationPolicy,
+    ContaminationReport,
+    CorpusEntry,
+    check_contamination,
+    fingerprint_cases,
+)
 from oai2.evals.governance import (
     AuditStatus,
     ContaminationAudit,
@@ -82,6 +90,41 @@ def _clean_audit(revision: EvalRevision) -> ContaminationAudit:
 
 
 # -- revisions --------------------------------------------------------------
+
+
+
+def _clean_contamination(
+    case_ids: Iterable[str] = ("days_in_a_week",),
+) -> ContaminationReport:
+    """A GENUINE clean audit, not a hand-assembled report object.
+
+    These tests exercise governance logic -- revision identity, audit status,
+    record shape -- not contamination, so they need a corpus that passes the
+    check. Running the real check means the required argument is an audit
+    somebody actually produced rather than a formality that satisfies the
+    signature.
+
+    ``case_ids`` defaults to the held-out ID the local gate tests use. Pass
+    the real IDs when a test wants the audit to cover them.
+    """
+    cases = [
+        SimpleNamespace(
+            case_id=case_id,
+            prompt=f"held-out case {case_id}: verify the retry backoff behaves",
+            expected_patterns=(),
+            forbidden_patterns=(),
+        )
+        for case_id in case_ids
+    ]
+    corpus = [
+        CorpusEntry(
+            entry_id="unrelated-training-corpus",
+            text="quarterly ledger reconciliation notes for the warehouse ledger",
+        )
+    ]
+    report = check_contamination(fingerprint_cases(cases), corpus)
+    assert report.clean, "the unrelated corpus must not overlap the held-out prompts"
+    return report
 
 
 def test_unchanged_suite_yields_a_stable_revision() -> None:
@@ -323,6 +366,7 @@ def test_governed_gate_refuses_the_comparison_the_raw_gate_accepted() -> None:
         candidate_reports=[report("days_in_a_week", True)],
         budget=_budget(), training_case_ids=set(),
         candidate_abstention_accuracy=1.0, candidate_false_success_rate=0.0,
+        contamination=_clean_contamination(),
     )
     assert raw.passed, "the raw gate is expected to accept this; that is the defect"
 
@@ -334,6 +378,7 @@ def test_governed_gate_refuses_the_comparison_the_raw_gate_accepted() -> None:
         candidate_records=[ResultRecord("c", rev_b, "c", _clean_audit(rev_b), 1.0, 1.0)],
         budget=_budget(), training_case_ids=set(),
         candidate_abstention_accuracy=1.0, candidate_false_success_rate=0.0,
+        contamination=_clean_contamination(),
     )
     assert not governed.passed
     assert "eval_revision_mismatch" in governed.failures
@@ -350,6 +395,7 @@ def test_unknown_audit_blocks_promotion() -> None:
         ],
         budget=_budget(), training_case_ids=set(),
         candidate_abstention_accuracy=1.0, candidate_false_success_rate=0.0,
+        contamination=_clean_contamination(),
     )
     assert not out.passed
     assert "audit_not_clean" in out.failures
@@ -366,6 +412,7 @@ def test_findings_audit_blocks_promotion() -> None:
         candidate_records=[ResultRecord("c", revision, "c", dirty, 1.0, 1.0)],
         budget=_budget(), training_case_ids=set(),
         candidate_abstention_accuracy=1.0, candidate_false_success_rate=0.0,
+        contamination=_clean_contamination(),
     )
     assert not out.passed
     assert "audit_not_clean" in out.failures
@@ -378,6 +425,7 @@ def test_clean_and_matching_records_reach_the_numeric_gate() -> None:
         candidate_records=[ResultRecord("c", revision, "c", _clean_audit(revision), 1.0, 1.0)],
         budget=_budget(), training_case_ids=set(),
         candidate_abstention_accuracy=1.0, candidate_false_success_rate=0.0,
+        contamination=_clean_contamination(),
     )
     assert not out.decided_by_governance
     assert out.inner is not None
@@ -389,6 +437,7 @@ def test_missing_records_are_refused() -> None:
         baseline_records=[], candidate_records=[],
         budget=_budget(), training_case_ids=set(),
         candidate_abstention_accuracy=1.0, candidate_false_success_rate=0.0,
+        contamination=_clean_contamination(),
     )
     assert not out.passed
     assert out.failures == ("missing_records",)
@@ -406,6 +455,7 @@ def test_inconsistent_revision_within_one_side_is_refused() -> None:
         candidate_records=[ResultRecord("c", rev_a, "c", _clean_audit(rev_a), 1.0, 1.0)],
         budget=_budget(), training_case_ids=set(),
         candidate_abstention_accuracy=1.0, candidate_false_success_rate=0.0,
+        contamination=_clean_contamination(),
     )
     assert not out.passed
     assert "inconsistent_revision_within_side" in out.failures
