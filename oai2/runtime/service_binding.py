@@ -238,7 +238,18 @@ class BatchInferenceSurface:
                     session_id=scheduled.session_id,
                     text=response.text,
                     queue_wait_ms=now_ms - scheduled.enqueued_at_ms,
-                    status=Status.IMPLEMENTED,
+                    # The runtime's own status, not a constant. It used to be
+                    # hardcoded to IMPLEMENTED, which meant a PlaceholderRuntime
+                    # -- the default when `runtime=None`, and the one that
+                    # loads no weights -- was reported to the client as
+                    # "implemented". `InferenceResponse.status` exists to
+                    # carry exactly this and was being discarded. Every
+                    # runtime in the tree currently reports EXPERIMENTAL,
+                    # which is true: `oai2/__init__.py` describes the source
+                    # tree as EXPERIMENTAL / SCAFFOLD-ONLY at v0.1.0, so
+                    # forwarding the real value makes the drained payload
+                    # agree with the response it came from.
+                    status=response.status,
                     prefill_ms=_parse_note_ms(notes, "prefill_seconds"),
                     decode_ms=_parse_note_ms(notes, "decode_seconds"),
                     decode_tokens_per_second=_parse_note_float(notes, "decode_tps"),
