@@ -86,33 +86,67 @@ class WorkloadSample:
     verified_success: bool
     verified_actions: int = 0
     generated_tokens: int = 0
-    decode_tokens_per_second: float = 0.0
-    tool_ms: float = 0.0
-    retrieval_ms: float = 0.0
-    vision_ms: float = 0.0
-    build_test_ms: float = 0.0
+    # Components that may not have OCCURRED in a given replay are `None`,
+    # never 0.0.
+    #
+    # A 0.0 here is a measurement claim: the tool ran and took no time. The
+    # default used to make it mean "no tool ran", and `summarize_samples`
+    # then built a latency distribution out of that absence. Measured on
+    # eec53ac, a 40-replay workload that never invoked a tool reported:
+    #
+    #     ttft_ms    count=40  mean=100.00  p95=100.00
+    #     tool_ms    count=40  mean=  0.00  p95=  0.00
+    #
+    # `count=40` is not "unmeasured" -- it is false: zero tool invocations
+    # occurred. And p95=0.00 is the best value any latency budget can be
+    # given, produced entirely by absence, so a `tool_ms.p95 <= X` budget
+    # passes trivially for a workload that never exercised the tool at all.
+    # The two lines sit in the same report with the same shape, one honest
+    # and one not, and nothing marked which was which.
+    #
+    # This is the same failure closed three times elsewhere in this
+    # repository: `no_comparable_samples`, `capability_measured`, and
+    # `RetrievalMetrics.insufficient_evidence`. An absence must never
+    # render as a clean measurement.
+    decode_tokens_per_second: float | None = None
+    tool_ms: float | None = None
+    retrieval_ms: float | None = None
+    vision_ms: float | None = None
+    build_test_ms: float | None = None
     deadline_missed: bool = False
 
     def __post_init__(self) -> None:
         for name in ("target_hardware", "config_id"):
             if not getattr(self, name).strip():
                 raise ValueError(f"{name} must be non-empty")
+        for name in ("ttft_ms", "first_useful_action_ms", "end_to_end_ms"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and >= 0")
         for name in (
-            "ttft_ms",
-            "first_useful_action_ms",
-            "end_to_end_ms",
             "decode_tokens_per_second",
             "tool_ms",
             "retrieval_ms",
             "vision_ms",
             "build_test_ms",
         ):
-            value = float(getattr(self, name))
-            if not math.isfinite(value) or value < 0.0:
-                raise ValueError(f"{name} must be finite and >= 0")
+            value = getattr(self, name)
+            # None means the component did not occur in this replay. 0.0 means
+            # it did and took no measurable time. Both are legal; conflating
+            # them is the defect.
+            if value is None:
+                continue
+            if not math.isfinite(float(value)) or float(value) < 0.0:
+                raise ValueError(f"{name} must be null or finite and >= 0")
         for name in ("verified_actions", "generated_tokens"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be >= 0")
+        if self.generated_tokens > 0 and self.decode_tokens_per_second is None:
+            raise ValueError(
+                "decode_tokens_per_second is required when generated_tokens > 0: "
+                "a replay that produced tokens always has a decode rate, and "
+                "leaving it null would report generated output with no rate"
+            )
         if self.ttft_ms > self.end_to_end_ms:
             raise ValueError("ttft_ms cannot exceed end_to_end_ms")
         if self.first_useful_action_ms > self.end_to_end_ms:
@@ -144,11 +178,14 @@ class WorkloadReport:
     ttft_ms: Distribution
     first_useful_action_ms: Distribution
     end_to_end_ms: Distribution
-    decode_tokens_per_second: Distribution
-    tool_ms: Distribution
-    retrieval_ms: Distribution
-    vision_ms: Distribution
-    build_test_ms: Distribution
+    # Each is None when NO replay in the sample set exercised that
+    # component. A Distribution here is always backed by its own `count`
+    # real measurements, so the two can no longer be confused.
+    decode_tokens_per_second: Distribution | None
+    tool_ms: Distribution | None
+    retrieval_ms: Distribution | None
+    vision_ms: Distribution | None
+    build_test_ms: Distribution | None
     verified_success_rate: float
     false_success_rate: float
     deadline_miss_rate: float
@@ -189,6 +226,16 @@ def _distribution(values: list[float]) -> Distribution:
     )
 
 
+def _optional_distribution(values: list[float | None]) -> Distribution | None:
+    """Build a distribution over the replays where the component OCCURRED.
+
+    Returns None when it never occurred, so an unexercised component is not
+    a distribution of zeros claiming a non-zero count.
+    """
+    measured = [float(value) for value in values if value is not None]
+    return _distribution(measured) if measured else None
+
+
 def summarize_samples(samples: list[WorkloadSample]) -> WorkloadReport:
     """Aggregate one homogeneous workload/config sample set."""
     if not samples:
@@ -213,13 +260,17 @@ def summarize_samples(samples: list[WorkloadSample]) -> WorkloadReport:
             [sample.first_useful_action_ms for sample in samples]
         ),
         end_to_end_ms=_distribution([sample.end_to_end_ms for sample in samples]),
-        decode_tokens_per_second=_distribution(
+        decode_tokens_per_second=_optional_distribution(
             [sample.decode_tokens_per_second for sample in samples]
         ),
-        tool_ms=_distribution([sample.tool_ms for sample in samples]),
-        retrieval_ms=_distribution([sample.retrieval_ms for sample in samples]),
-        vision_ms=_distribution([sample.vision_ms for sample in samples]),
-        build_test_ms=_distribution([sample.build_test_ms for sample in samples]),
+        tool_ms=_optional_distribution([sample.tool_ms for sample in samples]),
+        retrieval_ms=_optional_distribution(
+            [sample.retrieval_ms for sample in samples]
+        ),
+        vision_ms=_optional_distribution([sample.vision_ms for sample in samples]),
+        build_test_ms=_optional_distribution(
+            [sample.build_test_ms for sample in samples]
+        ),
         verified_success_rate=sum(sample.verified_success for sample in samples) / n,
         false_success_rate=sum(sample.false_success for sample in samples) / n,
         deadline_miss_rate=sum(sample.deadline_missed for sample in samples) / n,

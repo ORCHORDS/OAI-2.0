@@ -138,7 +138,21 @@ def build_samples(cap_seconds: float) -> tuple[list[WorkloadSample], list[dict]]
                 # separates the 4 that are right from the 8 that are not.
                 declared_success=True,
                 verified_success=bool(solved),
-                generated_tokens=int(artifact["sampling"]["max_tokens"]),
+                # `generated_tokens` is deliberately NOT set from
+                # `artifact["sampling"]["max_tokens"]`. That is the configured
+                # generation ceiling, not a count of anything the model
+                # produced: it was a 256-token budget whether a case answered
+                # in 12 tokens or 256, and for a censored case it was never
+                # reached at all. Reporting it as an observation overstated
+                # generation for every case in the set.
+                #
+                # The attempt records carry no per-attempt token count, so
+                # there is nothing measured to report. `generated_tokens=0`
+                # means "not measured", which is the truth, and it keeps this
+                # sample out of any decode-rate statistic -- a replay that
+                # produced tokens always has a rate, and inventing one here
+                # would have been the same defect in a different column.
+                generated_tokens=0,
                 deadline_missed=deadline_missed,
             )
         )
