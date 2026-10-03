@@ -178,8 +178,12 @@ class ResidencyAccountant:
         _non_negative_float(now_ms, "now_ms")
         existing = self._records.get(request_id)
         if existing is not None:
-            # A queued request re-decided as ADMIT promotes in place; only
-            # genuinely duplicated decisions are rejected.
+            # A queued request re-decided as ADMIT promotes in place, and one
+            # re-decided as REJECT is refused in place. Without the second
+            # transition a request that queued and was then refused could only
+            # be closed out as a cancellation, which would misreport a
+            # deliberate refusal as a client giving up. Only genuinely
+            # duplicated decisions are rejected.
             if existing.outcome is ResidencyOutcome.PENDING and decision is AdmissionAction.ADMIT:
                 updated = ResidencyRecord(
                     request_id=existing.request_id,
@@ -194,6 +198,21 @@ class ResidencyAccountant:
                 )
                 self._records[request_id] = updated
                 self._admitted_total += 1
+                return updated
+            if existing.outcome is ResidencyOutcome.PENDING and decision is AdmissionAction.REJECT:
+                updated = ResidencyRecord(
+                    request_id=existing.request_id,
+                    mode=existing.mode,
+                    swarm_lanes=existing.swarm_lanes,
+                    required_memory_gb=existing.required_memory_gb,
+                    enqueued_at_ms=existing.enqueued_at_ms,
+                    decision=decision,
+                    decision_reason=reason,
+                    admitted_at_ms=None,
+                    outcome=ResidencyOutcome.REJECTED,
+                )
+                self._records[request_id] = updated
+                self._rejected_total += 1
                 return updated
             raise ValueError(f"request already tracked: {request_id}")
 
