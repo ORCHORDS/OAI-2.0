@@ -107,6 +107,24 @@ CASE_IDS = ("days_in_a_week", "count_letter_in_word", "boolean_logic", "unit_con
 TARGET_WORKLOAD = WorkloadClass.NORMAL
 
 
+def _tail(value: float | None) -> float | None:
+    """Round a measured tail percentile, preserving an unmeasured one.
+
+    `Distribution.p95`/`p99` are None when the cell ran too few replays to
+    support a tail estimate. That absence must reach the artifact as null:
+    rounding it would raise, and substituting 0.0 would write a fabricated
+    "perfectly fast tail" into committed evidence.
+    """
+    return None if value is None else round(value, 2)
+
+
+def _ratio(candidate: float | None, baseline: float | None) -> float | None:
+    """Candidate/baseline for a tail, or None if either side is unmeasured."""
+    if candidate is None or not baseline:
+        return None
+    return round(candidate / baseline, 4)
+
+
 @dataclass(slots=True)
 class Row:
     """One measured request."""
@@ -440,20 +458,21 @@ def main() -> int:
             promotions[f"{name}-a{agents}"] = {
                 "passed": verdict.passed,
                 "failures": list(verdict.failures),
-                "baseline_p95_ms": round(baseline.end_to_end_ms.p95, 2),
-                "candidate_p95_ms": round(candidate.end_to_end_ms.p95, 2),
-                "p95_ratio": round(
-                    candidate.end_to_end_ms.p95 / baseline.end_to_end_ms.p95, 4
-                )
-                if baseline.end_to_end_ms.p95
-                else None,
-                "baseline_p99_ms": round(baseline.end_to_end_ms.p99, 2),
-                "candidate_p99_ms": round(candidate.end_to_end_ms.p99, 2),
-                "p99_ratio": round(
-                    candidate.end_to_end_ms.p99 / baseline.end_to_end_ms.p99, 4
-                )
-                if baseline.end_to_end_ms.p99
-                else None,
+                # p95/p99 are None when the cell ran too few replays to
+                # measure a tail (see Distribution). Serialize the absence
+                # as null rather than rounding it -- `round(None, 2)` raises,
+                # and substituting 0.0 would put a fabricated zero into a
+                # committed artifact.
+                "baseline_p95_ms": _tail(baseline.end_to_end_ms.p95),
+                "candidate_p95_ms": _tail(candidate.end_to_end_ms.p95),
+                "p95_ratio": _ratio(
+                    candidate.end_to_end_ms.p95, baseline.end_to_end_ms.p95
+                ),
+                "baseline_p99_ms": _tail(baseline.end_to_end_ms.p99),
+                "candidate_p99_ms": _tail(candidate.end_to_end_ms.p99),
+                "p99_ratio": _ratio(
+                    candidate.end_to_end_ms.p99, baseline.end_to_end_ms.p99
+                ),
                 "baseline_deadline_miss_rate": round(baseline.deadline_miss_rate, 4),
                 "candidate_deadline_miss_rate": round(candidate.deadline_miss_rate, 4),
                 "baseline_verified_rate": round(baseline.verified_success_rate, 4),

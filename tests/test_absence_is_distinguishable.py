@@ -543,3 +543,84 @@ def test_a_grep_that_skipped_files_is_distinguishable_from_a_clean_one(
     assert complete.coverage_complete is True
     assert complete.unreadable_count == 0
     assert complete.output == "(no matches)"
+
+
+# --------------------------------------------------------------------------
+# #231 REQ-QOS-014 -- one replay reported a p95 and a p99 it never measured
+# --------------------------------------------------------------------------
+
+
+def test_a_single_replay_does_not_report_a_tail_it_never_measured() -> None:
+    """REQ-QOS-014 asks for p50/p95/p99 "where repetition count supports
+    tail estimates", plus sample count and variance.
+
+    `_distribution` computed the percentiles unconditionally and
+    `_percentile` had a `len(ordered) == 1` case returning the only value
+    for whatever percentile was asked. One replay therefore produced:
+
+        Distribution(count=1, mean=100.0, variance=0.0,
+                     p50=100.0, p95=100.0, p99=100.0)
+
+    -- five agreeing statistics, none of which is a tail. Measured before
+    this change, a one-replay report evaluated clean against a p99 service
+    budget:
+
+        evaluate_budget -> passed=True failures=()
+
+    This is the absence-as-clean family on the *repetition-count* axis,
+    after the same file had already closed it on the component axis
+    (`tool_ms` and friends) and on the throughput axis
+    (`verified_actions_per_second`).
+    """
+    from oai2.evals.qos import (
+        BudgetKind,
+        WorkloadBudget,
+        WorkloadClass,
+        WorkloadSample,
+        evaluate_budget,
+        summarize_samples,
+    )
+
+    one = WorkloadSample(
+        workload=WorkloadClass.NORMAL,
+        target_hardware="hw",
+        config_id="cfg",
+        ttft_ms=10.0,
+        first_useful_action_ms=20.0,
+        end_to_end_ms=100.0,
+        declared_success=True,
+        verified_success=True,
+    )
+    report = summarize_samples([one])
+
+    assert report.end_to_end_ms.count == 1
+    assert report.end_to_end_ms.p95 is None
+    assert report.end_to_end_ms.p99 is None
+
+    # The real statistics survive -- this is not "empty the data".
+    assert report.end_to_end_ms.mean == 100.0
+    assert report.end_to_end_ms.p50 == 100.0
+
+    # And the gate refuses rather than passing on the absence.
+    budget = WorkloadBudget(
+        version="v-1",
+        workload=WorkloadClass.NORMAL,
+        kind=BudgetKind.SERVICE_BUDGET,
+        target_hardware="hw",
+        config_id="cfg",
+        first_useful_action_p95_ms=1000.0,
+        end_to_end_p95_ms=1000.0,
+        end_to_end_p99_ms=1000.0,
+        max_false_success_rate=0.0,
+        min_verified_success_rate=1.0,
+        max_deadline_miss_rate=0.0,
+    )
+    result = evaluate_budget(report, budget)
+    assert not result.passed, "a single replay satisfied a p95/p99 service budget"
+    assert "end_to_end_p99_unsupported" in result.failures
+
+    # Opposite direction: with repetition, the tail is real and the gate
+    # can actually evaluate it.
+    two = summarize_samples([one, one])
+    assert two.end_to_end_ms.p95 is not None
+    assert evaluate_budget(two, budget).passed

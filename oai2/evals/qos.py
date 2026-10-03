@@ -161,12 +161,51 @@ class WorkloadSample:
 
 @dataclass(slots=True, frozen=True)
 class Distribution:
+    """Latency distribution over the replays where a component OCCURRED.
+
+    `mean`, `variance`, `p50` and `count` are defined for any non-empty
+    sample set. `p95` and `p99` are not: they are None when `count < 2`.
+
+    REQ-QOS-014 asks for percentiles "where repetition count supports tail
+    estimates" and for sample count/variance beside them. One replay
+    supports neither tail, and `_percentile` used to supply them anyway
+    via a `len(ordered) == 1` special case that returns the single value
+    for *every* requested percentile. One measurement therefore rendered
+    as five agreeing statistics:
+
+        Distribution(count=1, mean=100.0, variance=0.0,
+                     p50=100.0, p95=100.0, p99=100.0)
+
+    The percentiles are the defect, and they are a different kind of claim
+    from the variance. The population variance of a singleton genuinely
+    is 0.0 -- it is a correct answer to a defined question, and `count`
+    travels beside it (reviewed and recorded in
+    tests/test_absent_measurement_invariant.py). A p99 from one point is
+    not a correct answer to anything: there is no tail, and the
+    interpolation helper was manufacturing a rank that no observation
+    occupied. A gate reading `end_to_end_ms.p99 <= X` then passed on a
+    number that was never a tail.
+
+    This is the same defect already closed four times in this repository
+    on the *component* axis (`tool_ms` and friends,
+    `verified_actions_per_second`, `capability_measured`,
+    `RetrievalMetrics.insufficient_evidence`); here it appears on the
+    *repetition-count* axis. Consumers must treat None as "not measured" --
+    `evaluate_budget` and `evaluate_promotion` fail on it rather than
+    skipping, so an unmeasured tail can never satisfy a limit.
+    """
+
     count: int
     mean: float
     variance: float
     p50: float
-    p95: float
-    p99: float
+    p95: float | None
+    p99: float | None
+
+    @property
+    def tail_measured(self) -> bool:
+        """Whether a tail estimate exists for this sample set."""
+        return self.p95 is not None
 
 
 @dataclass(slots=True, frozen=True)
@@ -232,13 +271,18 @@ def _percentile(values: list[float], percentile: float) -> float:
 def _distribution(values: list[float]) -> Distribution:
     if not values:
         raise ValueError("at least one value is required")
+    # A single replay has no tail, so the percentiles are absent rather
+    # than invented. See Distribution's docstring. The variance stays a
+    # float: the population variance of a singleton really is 0.0, and
+    # `count` travels with it.
+    repeatable = len(values) >= 2
     return Distribution(
         count=len(values),
         mean=statistics.fmean(values),
-        variance=statistics.pvariance(values) if len(values) > 1 else 0.0,
+        variance=statistics.pvariance(values) if repeatable else 0.0,
         p50=_percentile(values, 0.50),
-        p95=_percentile(values, 0.95),
-        p99=_percentile(values, 0.99),
+        p95=_percentile(values, 0.95) if repeatable else None,
+        p99=_percentile(values, 0.99) if repeatable else None,
     )
 
 
@@ -311,12 +355,25 @@ def evaluate_budget(report: WorkloadReport, budget: WorkloadBudget) -> BudgetEva
         raise ValueError("report and budget identity do not match")
 
     failures: list[str] = []
-    if report.first_useful_action_ms.p95 > budget.first_useful_action_p95_ms:
-        failures.append("first_useful_action_p95")
-    if report.end_to_end_ms.p95 > budget.end_to_end_p95_ms:
-        failures.append("end_to_end_p95")
-    if report.end_to_end_ms.p99 > budget.end_to_end_p99_ms:
-        failures.append("end_to_end_p99")
+    # An absent tail is "unmeasurable", not "inside the limit". Marking it
+    # absent and then comparing nothing would leave the gate passing on a
+    # number that was never measured, so each unsupported tail is its own
+    # failure and the corresponding *_over_budget check is skipped.
+    checks: tuple[tuple[str, float | None, float, str], ...] = (
+        (
+            "first_useful_action_p95",
+            report.first_useful_action_ms.p95,
+            budget.first_useful_action_p95_ms,
+            "first_useful_action_p95_unsupported",
+        ),
+        ("end_to_end_p95", report.end_to_end_ms.p95, budget.end_to_end_p95_ms, "end_to_end_p95_unsupported"),
+        ("end_to_end_p99", report.end_to_end_ms.p99, budget.end_to_end_p99_ms, "end_to_end_p99_unsupported"),
+    )
+    for name, actual, maximum, unsupported in checks:
+        if actual is None:
+            failures.append(unsupported)
+        elif actual > maximum:
+            failures.append(name)
     if report.false_success_rate > budget.max_false_success_rate:
         failures.append("false_success_rate")
     if report.verified_success_rate < budget.min_verified_success_rate:
@@ -377,10 +434,29 @@ def evaluate_promotion(
         raise ValueError("max_deadline_miss_increase must be between 0 and 1")
 
     failures: list[str] = []
-    if candidate.end_to_end_ms.p95 > baseline.end_to_end_ms.p95 * max_tail_regression_ratio:
-        failures.append("p95_regression")
-    if candidate.end_to_end_ms.p99 > baseline.end_to_end_ms.p99 * max_tail_regression_ratio:
-        failures.append("p99_regression")
+    # Same rule as evaluate_budget: a tail that was never measured is a
+    # promotion blocker, not a pass. Comparing `None > None` would raise,
+    # and silently treating either side as absent-tolerant would let a
+    # one-replay candidate replace a measured baseline.
+    tail_checks: tuple[tuple[str, float | None, float | None, str], ...] = (
+        (
+            "p95_regression",
+            candidate.end_to_end_ms.p95,
+            baseline.end_to_end_ms.p95,
+            "p95_unsupported",
+        ),
+        (
+            "p99_regression",
+            candidate.end_to_end_ms.p99,
+            baseline.end_to_end_ms.p99,
+            "p99_unsupported",
+        ),
+    )
+    for name, candidate_tail, baseline_tail, unsupported in tail_checks:
+        if candidate_tail is None or baseline_tail is None:
+            failures.append(unsupported)
+        elif candidate_tail > baseline_tail * max_tail_regression_ratio:
+            failures.append(name)
     if (
         candidate.deadline_miss_rate
         > baseline.deadline_miss_rate + max_deadline_miss_increase
@@ -399,12 +475,21 @@ def evaluate_promotion(
 
 
 def useful_work_rank_key(report: WorkloadReport) -> tuple[float, float, float, float]:
-    """Lower is better; usefulness/tail latency outrank raw token throughput."""
+    """Lower is better; usefulness/tail latency outrank raw token throughput.
+
+    An absent tail ranks as infinity, not zero. A report that never
+    measured a p95 has no useful-action latency to rank on, and scoring
+    that absence as 0.0 would place it ahead of every report that did
+    measure a fast tail -- the same absence-reads-as-clean defect one level
+    up, where the reward is for lacking evidence.
+    """
     return (
         report.false_success_rate,
         -report.verified_success_rate,
-        report.first_useful_action_ms.p95,
-        report.end_to_end_ms.p95,
+        report.first_useful_action_ms.p95
+        if report.first_useful_action_ms.p95 is not None
+        else math.inf,
+        report.end_to_end_ms.p95 if report.end_to_end_ms.p95 is not None else math.inf,
     )
 
 

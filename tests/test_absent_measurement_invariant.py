@@ -140,7 +140,14 @@ ALLOWED_ZERO_SUBSTITUTIONS = {
     "oai2/knowledge/evidence_package.py|1.0 - precision if k else 0.0#1",
     # Population variance of a singleton IS zero, and `Distribution.count`
     # is honest about being 1. The sample count travels with the number.
-    "oai2/evals/qos.py|statistics.pvariance(values) if len(values) > 1 else 0.0#1",
+    #
+    # The percentiles beside it were REMOVED rather than allowed:
+    # `_percentile` had a `len(ordered) == 1` case returning the single
+    # value for every requested percentile, so a one-replay sample set
+    # reported a p95 and a p99 that no observation occupied. p95/p99 are
+    # now None below count 2, and the budget/promotion gates fail on them
+    # rather than skipping the comparison.
+    "oai2/evals/qos.py|statistics.pvariance(values) if repeatable else 0.0#1",
 }
 
 
