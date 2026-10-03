@@ -405,6 +405,56 @@ def test_an_unfinished_run_is_distinguishable_from_a_verified_lesson() -> None:
 
 
 # --------------------------------------------------------------------------
+# follow-on to b5b7e83 -- the status was corrected, the body still self-declared
+# --------------------------------------------------------------------------
+
+
+def test_a_corrected_status_is_not_undone_by_its_own_body() -> None:
+    """b5b7e83 fixed `status`. It left the headline string alone.
+
+    `extract_lesson` built its body with an unconditional
+    `f"verified lesson from task_id={task_id}"` while `status` was
+    computed separately and could be EXPERIMENTAL. So the record carried
+    an EXPERIMENTAL status and a body asserting verification -- and the
+    body is the part that propagates, because `content_hash` is
+    `sha256(content)` and `R2BodyDescriptor.from_knowledge` enforces that
+    equality before the body is stored.
+
+    This is the cross-cutting form of the b5b7e83 defect: fixing one of
+    the two disagreeing fields and not the other leaves the false
+    assertion intact for every consumer that reads the body.
+    """
+
+    def body(*, final_text: str, finished_reason: str | None) -> str:
+        return extract_lesson(
+            _run(final_text=final_text, finished_reason=finished_reason),
+            task_id="t-absence-body",
+            verification_ref="verifier://sess",
+            source_version="v1",
+            runtime_version="oai2/0.1",
+        ).content
+
+    for reason in ("length", "tool_calls", None, "error", "cancelled"):
+        content = body(final_text="partial answer", finished_reason=reason)
+        assert "verified" not in content, (
+            f"finished_reason={reason!r} produced a body still readable as "
+            f"verified: {content.splitlines()[0]!r}"
+        )
+
+    # The honest fact is still present -- the claim was withdrawn, not the
+    # evidence for withdrawing it.
+    assert "finished_reason='length'" in body(
+        final_text="partial answer", finished_reason="length"
+    )
+
+    # Opposite direction: a completed run is still labelled, byte-identically,
+    # so no already-stored content_hash or R2 blob key changes.
+    assert body(final_text="done", finished_reason="stop").startswith(
+        "verified lesson from task_id=t-absence-body\n"
+    )
+
+
+# --------------------------------------------------------------------------
 # The invariant itself
 # --------------------------------------------------------------------------
 

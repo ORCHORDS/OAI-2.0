@@ -609,3 +609,165 @@ class TestOnlyACompletedRunBecomesAnImplementedLesson:
             runtime_version="oai2/0.1",
         )
         assert obj.status is Status.EXPERIMENTAL
+
+
+class TestTheLessonBodyMustNotSelfDeclareAVerificationItDoesNotHave:
+    """The `status` field was fixed; the `content` string was not.
+
+    `extract_lesson` builds its body with an unconditional first line:
+
+        f"verified lesson from task_id={task_id}\\n"
+
+    while `status` is computed two lines later and can be EXPERIMENTAL.
+    So the object carried an EXPERIMENTAL status *and* a body asserting
+    "verified lesson" — two fields of the same record disagreeing about
+    whether verification happened, with the self-declaration being the
+    one a reader (or a downstream summariser) sees first.
+
+    This is the Master #1 review item taken on its own: a self-declaration
+    and a real measurement must not read the same. `finished_reason` was
+    already recorded in the body, so the honest fact was present and
+    uncontradicted -- only the headline lied.
+
+    Why this matters beyond cosmetics: `content_hash` is derived from
+    `content` (`sha256_hex(content)`), and `transport.py:307-309`
+    *enforces* `sha256(content) == content_hash` on the way to R2. The
+    body is therefore part of the object's identity as stored, and an
+    object whose body asserts a verification that never happened
+    propagates that assertion to every reader of the store.
+    """
+
+    def test_an_experimental_lesson_does_not_call_itself_verified(self) -> None:
+        run = _make_run(
+            user_prompt="refactor the module",
+            final_text="here is a partial answer",
+            finished_reason="length",
+        )
+        obj = extract_lesson(
+            run,
+            task_id="t-label-truncated",
+            verification_ref="verifier://sess-label-truncated",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+        )
+        assert obj.status is Status.EXPERIMENTAL
+        assert "verified lesson" not in obj.content, (
+            "an EXPERIMENTAL lesson body asserted verification it never "
+            f"received: {obj.content.splitlines()[0]!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "reason", ["stop", "tool_calls", "length", None, "error", "cancelled"]
+    )
+    def test_no_branch_leaks_a_bare_verified_token(self, reason: str | None) -> None:
+        """The token itself must be unreadable, not merely negated.
+
+        "unverified lesson" was the first spelling and it is unsafe: the
+        word contains "verified" as a substring, so every token scan in
+        this repository still matches it. This repository really does
+        scan lesson bodies for that token --
+        `scripts/battle_test_learning.py:1988` does
+        `"verified lesson from task_id=bt-035-pos" in content` -- so a
+        negating label is not a fix, it is a spelling that only fools the
+        author.
+
+        Asserting on the bare token rather than the phrase is what makes
+        this bite: it fails on "unverified" exactly as it fails on
+        "verified".
+        """
+        run = _make_run(
+            user_prompt="refactor the module",
+            final_text="here is a partial answer",
+            finished_reason=reason,
+        )
+        obj = extract_lesson(
+            run,
+            task_id=f"t-label-token-{reason}",
+            verification_ref="verifier://sess-label-token",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+        )
+        expected = (
+            Status.IMPLEMENTED if reason == "stop" else Status.EXPERIMENTAL
+        )
+        assert obj.status is expected
+        if obj.status is Status.EXPERIMENTAL:
+            assert "verified" not in obj.content, (
+                f"finished_reason={reason!r} produced a body still "
+                f"readable as verified: {obj.content.splitlines()[0]!r}"
+            )
+
+    def test_the_body_still_records_the_finished_reason(self) -> None:
+        """The honest fact must remain, not be deleted with the claim.
+
+        Removing the word "verified" is only correct if the reason that
+        disqualified the run is still legible in the body. Otherwise the
+        fix trades a false claim for an absence.
+        """
+        run = _make_run(
+            user_prompt="refactor the module",
+            final_text="here is a partial answer",
+            finished_reason="length",
+        )
+        obj = extract_lesson(
+            run,
+            task_id="t-label-keeps-reason",
+            verification_ref="verifier://sess-label-keeps-reason",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+        )
+        assert "finished_reason='length'" in obj.content
+
+    def test_opposite_direction_a_verified_lesson_is_still_labelled_verified(
+        self,
+    ) -> None:
+        """Guard against over-correction.
+
+        The real completed case must keep the byte-identical first line.
+        It is not cosmetic: changing it changes `content_hash`, which
+        changes the R2 blob key `oai2-blobs/{content_hash}` and would
+        orphan every already-stored verified lesson. The fix is
+        deliberately scoped to the EXPERIMENTAL branch only.
+        """
+        run = _make_run(
+            user_prompt="refactor the module", final_text="done", finished_reason="stop"
+        )
+        obj = extract_lesson(
+            run,
+            task_id="t-label-stopped",
+            verification_ref="verifier://sess-label-stopped",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+        )
+        assert obj.status is Status.IMPLEMENTED
+        assert obj.content.startswith("verified lesson from task_id=t-label-stopped\n")
+
+    def test_content_hash_still_agrees_with_the_body(self) -> None:
+        """The derived identity must be recomputed on both branches.
+
+        A label change that left `content_hash` computed from a different
+        string would pass the `startswith` assertions above and still be
+        rejected by `R2BodyDescriptor.from_knowledge` at write time.
+        """
+        from oai2.knowledge.transport import R2BodyDescriptor
+
+        for reason, expected in (("stop", Status.IMPLEMENTED), ("length", Status.EXPERIMENTAL)):
+            run = _make_run(
+                user_prompt="refactor the module",
+                final_text="a summary",
+                finished_reason=reason,
+            )
+            obj = extract_lesson(
+                run,
+                task_id=f"t-label-hash-{reason}",
+                verification_ref="verifier://sess-label-hash",
+                source_version="b224fc6",
+                runtime_version="oai2/0.1",
+            )
+            assert obj.status is expected
+            # `from_knowledge` re-hashes the body and raises on a mismatch,
+            # so reaching this line is already half the assertion; the
+            # explicit compare states which invariant is being pinned.
+            descriptor = R2BodyDescriptor.from_knowledge(obj)
+            assert descriptor.content_hash == obj.content_hash
+            assert descriptor.object_key == f"oai2-blobs/{obj.content_hash}"
