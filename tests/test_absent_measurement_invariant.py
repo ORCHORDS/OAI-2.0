@@ -96,8 +96,19 @@ def _empty_substitutions() -> dict[str, str]:
 #: Adding an entry here means asserting the new site is a genuine zero.
 ALLOWED_ZERO_SUBSTITUTIONS = {
     # A failed check scores 0.0. That is the score, not a missing measurement.
-    "oai2/evals/__init__.py:209",
-    "oai2/evals/__init__.py:242",
+    #
+    # Re-reviewed 2026-10-04 at WI-BENCH-001: both lines moved from 209/242 to
+    # 221/254 because the `oai2.evals` package gained a 12-line
+    # `from .contamination import (...)` block above them. The source text at
+    # both sites is unchanged and the justification is unchanged, so this is a
+    # re-review of a moved site rather than a new allowlist entry.
+    #
+    # Worth recording for whoever owns this guard: keying on `file:lineno`
+    # means any import added above an allowlisted site fails this gate. That is
+    # the intended "force a re-review" behaviour and it worked here, but it
+    # makes the allowlist a tripwire for unrelated edits.
+    "oai2/evals/__init__.py:221",
+    "oai2/evals/__init__.py:254",
     # Zero words in empty content is a true count.
     "oai2/runtime/gateway_runtime.py:467",
     # A single key has depth 0.
