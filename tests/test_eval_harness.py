@@ -556,3 +556,92 @@ def test_evals_full_package_identity() -> None:
     assert ExportedTruthVerifierVerdict is _TruthVerifierVerdict
     assert ExportedClassifyTruthOutcome is _ClassifyTruthOutcome
     assert ExportedRunHeldOutTruthCases is _RunHeldOutTruthCases
+
+
+class TestHarnessReportCannotHideAnErroredSuite:
+    """A pass_rate of 1.0 must not be the only thing a caller can see.
+
+    `run_eval_harness(continue_on_error=True)` records a suite that raised as
+    `SuiteReport(n_cases=0, n_passed=0, error=...)`. That suite therefore
+    contributes 0 to both `HarnessReport.n_cases` and `n_passed`, and the two
+    aggregates are identical whether or not it ran:
+
+        one clean suite (12/12)          -> n_cases=12 n_passed=12 pass_rate=1.0
+        same suite + one that raised     -> n_cases=12 n_passed=12 pass_rate=1.0
+
+    and `HarnessReport` exposed no aggregate error field, so a reader of the
+    headline numbers could not tell "everything passed" from "a suite
+    crashed". This is the same "absent reads as clean" family already closed
+    for numerical error, capability measurement and input identity.
+    """
+
+    @staticmethod
+    def _report(*, with_error: bool) -> HarnessReport:
+        passing = SuiteReport(
+            suite_id="all-good",
+            capability="demo",
+            runtime="PlaceholderRuntime",
+            n_cases=12,
+            n_passed=12,
+        )
+        if not with_error:
+            return HarnessReport(runtime="PlaceholderRuntime", reports=(passing,))
+        return HarnessReport(
+            runtime="PlaceholderRuntime",
+            reports=(
+                passing,
+                SuiteReport(
+                    suite_id="exploded",
+                    capability="demo",
+                    runtime="PlaceholderRuntime",
+                    n_cases=0,
+                    n_passed=0,
+                    error="ValueError: boom",
+                ),
+            ),
+        )
+
+    def test_an_errored_suite_is_reported_at_the_aggregate(self) -> None:
+        report = self._report(with_error=True)
+        assert report.has_errors is True
+        assert report.errored_suite_ids == ("exploded",)
+
+    def test_a_clean_run_reports_no_errors(self) -> None:
+        """Opposite direction: the new fields must not be noisy.
+
+        A `has_errors` that was always True would be as misleading as one
+        that is always False, so the clean case is pinned too.
+        """
+        report = self._report(with_error=False)
+        assert report.has_errors is False
+        assert report.errored_suite_ids == ()
+
+    def test_the_error_is_visible_even_though_pass_rate_cannot_show_it(self) -> None:
+        """The distinction exists precisely because pass_rate cannot make it."""
+        clean = self._report(with_error=False)
+        errored = self._report(with_error=True)
+        assert (clean.n_cases, clean.n_passed, clean.pass_rate) == (
+            errored.n_cases,
+            errored.n_passed,
+            errored.pass_rate,
+        )
+        assert clean.has_errors is False
+        assert errored.has_errors is True
+
+    def test_pass_rate_semantics_are_unchanged(self) -> None:
+        """Opposite direction: an errored suite must still not count as a failure.
+
+        Folding errors into the denominator would change what `pass_rate`
+        means for every existing caller. The fix is additive -- surface the
+        error, do not silently redefine a published metric.
+        """
+        report = self._report(with_error=True)
+        assert report.n_cases == 12
+        assert report.n_passed == 12
+        assert report.pass_rate == 1.0
+
+    def test_empty_harness_reports_no_errors(self) -> None:
+        """Opposite direction: no suites at all is not an error."""
+        report = HarnessReport(runtime="PlaceholderRuntime")
+        assert report.has_errors is False
+        assert report.errored_suite_ids == ()
