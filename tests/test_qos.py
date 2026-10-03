@@ -124,9 +124,25 @@ def test_false_success_and_verified_useful_work_are_reported() -> None:
 
 
 def test_useful_work_rank_penalizes_fast_talking_slow_action() -> None:
-    fast_talking = summarize_samples([_sample(ttft=5, useful=500, total=700, tps=500)])
-    useful_sooner = summarize_samples([_sample(ttft=30, useful=100, total=300, tps=100)])
+    """AC-QOS-012: a fast-talking but slow-to-act baseline ranks worse.
+
+    Each side is repeated so a real p95 exists on both. This used to build
+    one sample per side, at which point neither report had a tail at all
+    and the ranking was decided by the median of a single replay -- the
+    test asserted the right property over a fixture too small to carry it.
+    Both sides are otherwise identical, so repetition does not change the
+    comparison it is making.
+    """
+    fast_talking = summarize_samples(
+        [_sample(ttft=5, useful=500, total=700, tps=500) for _ in range(4)]
+    )
+    useful_sooner = summarize_samples(
+        [_sample(ttft=30, useful=100, total=300, tps=100) for _ in range(4)]
+    )
     assert fast_talking.ttft_ms.p50 < useful_sooner.ttft_ms.p50
+    # Precondition for the comparison being about a tail at all.
+    assert fast_talking.end_to_end_ms.p95 is not None
+    assert useful_sooner.end_to_end_ms.p95 is not None
     assert useful_work_rank_key(useful_sooner) < useful_work_rank_key(fast_talking)
 
 
@@ -715,3 +731,172 @@ class TestThroughputWithoutMeasurableTime:
         )
         assert report.verified_actions_per_second == pytest.approx(20.0)
         assert report.throughput_measured is True
+
+
+class TestASingleReplayIsNotADistribution:
+    """REQ-QOS-014 asks for p50/p95/p99 "where repetition count supports
+    tail estimates" and for sample count/variance alongside them.
+
+    `_distribution` computed all of them unconditionally, so a sample set of
+    exactly one replay produced:
+
+        Distribution(count=1, mean=100.0, variance=0.0,
+                     p50=100.0, p95=100.0, p99=100.0)
+
+    Every statistic is the same single observation wearing five different
+    names. Two of those are fabrications rather than weak estimates:
+
+    - `variance=0.0` claims the latency had *zero spread*. The population
+      variance of one point is 0/0 -- undefined. A distribution of exactly
+      one measurement has unbounded uncertainty and reported perfect
+      certainty.
+    - `p95`/`p99` claim a tail was observed. With one point there is no
+      tail; the percentile degenerates to the median.
+
+    This is the failure this module has already closed four times for
+    *components* (`tool_ms` and friends, `verified_actions_per_second`,
+    `capability_measured`, `RetrievalMetrics.insufficient_evidence`), now
+    showing up on the *repetition-count* axis. The file's own comment on
+    `WorkloadSample` names the danger exactly: "a `tool_ms.p95 <= X`
+    budget passes trivially for a workload that never exercised the tool
+    at all." The same trivially-passing gate exists here for a tail that
+    was never measured.
+
+    Scope note: this fix is deliberately limited to the categorical case
+    (n < 2), not a statistical sufficiency threshold such as 20-for-p95 or
+    100-for-p99. Those numbers are a policy the requirements do not state,
+    and inventing one would silently invalidate the committed 12-sample
+    NORMAL measurement in `tests/test_normal_budget.py`. Thin-sample
+    sufficiency belongs in `WorkloadBudget` as a declared minimum.
+    """
+
+    def test_variance_stays_zero_and_the_count_travels_with_it(self) -> None:
+        """The reviewed decision, pinned so it is not re-litigated silently.
+
+        An earlier draft of this fix made `variance` None for a singleton
+        on the grounds that one point has undefined spread. That was
+        wrong and the cross-cutting registry had already recorded why: the
+        population variance of a singleton genuinely IS 0.0 -- it answers
+        a defined question correctly -- and `count=1` is reported beside
+        it, so the reader can see there was one observation. The percentiles
+        are a different kind of claim and are what this fix removes.
+
+        Recorded here so the distinction survives: a true zero with its
+        count attached is not an absence.
+        """
+        report = summarize_samples([_sample(ttft=10, useful=20, total=100)])
+        assert report.end_to_end_ms.variance == 0.0
+        assert report.end_to_end_ms.count == 1
+
+    def test_tail_percentiles_are_absent_without_repetition(self) -> None:
+        report = summarize_samples([_sample(ttft=10, useful=20, total=100)])
+        assert report.end_to_end_ms.p95 is None
+        assert report.end_to_end_ms.p99 is None
+
+    def test_mean_median_and_count_are_still_reported(self) -> None:
+        """The fix must not empty real data.
+
+        One observation genuinely has a mean, a median and a count. Only
+        the tail and the spread are undefined, so only those go to None.
+        """
+        report = summarize_samples([_sample(ttft=10, useful=20, total=100)])
+        assert report.end_to_end_ms.count == 1
+        assert report.end_to_end_ms.mean == 100.0
+        assert report.end_to_end_ms.p50 == 100.0
+
+    def test_opposite_direction_two_replays_do_report_a_tail(self) -> None:
+        """Guard against over-correction: real spread must survive."""
+        report = summarize_samples(
+            [
+                _sample(ttft=10, useful=20, total=100),
+                _sample(ttft=12, useful=24, total=300),
+            ]
+        )
+        assert report.end_to_end_ms.count == 2
+        assert report.end_to_end_ms.variance > 0.0
+        assert report.end_to_end_ms.p95 is not None
+        assert report.end_to_end_ms.p99 is not None
+        assert report.end_to_end_ms.p99 > report.end_to_end_ms.p50
+
+    def test_a_budget_gate_may_not_pass_on_an_unmeasured_tail(self) -> None:
+        """The gate must fail, not silently skip.
+
+        This is the half that matters. Marking the tail absent is only a
+        fix if a caller cannot then read the absence as a pass. Measured
+        before this change, one replay at 100ms evaluated clean against a
+        p99 service budget:
+
+            evaluate_budget -> passed=True failures=()
+
+        A budget gate that cannot report an unmeasurable tail would let
+        any single-replay report satisfy any tail budget.
+        """
+        budget = WorkloadBudget(
+            version="v-single",
+            workload=WorkloadClass.NORMAL,
+            kind=BudgetKind.SERVICE_BUDGET,
+            target_hardware="mac-studio-m5",
+            config_id="normal-v1",
+            first_useful_action_p95_ms=1000.0,
+            end_to_end_p95_ms=1000.0,
+            end_to_end_p99_ms=1000.0,
+            max_false_success_rate=0.0,
+            min_verified_success_rate=1.0,
+            max_deadline_miss_rate=0.0,
+        )
+        report = summarize_samples([_sample(ttft=10, useful=20, total=100)])
+        result = evaluate_budget(report, budget)
+        assert not result.passed, (
+            "a single replay satisfied a p95/p99 service budget: the tail was "
+            "never measured, so the limit was never actually checked"
+        )
+        assert "end_to_end_p99_unsupported" in result.failures
+        assert "first_useful_action_p95_unsupported" in result.failures
+        # The honest verdict is "unmeasurable", not "over budget" -- a
+        # passing latency comparison would be a claim about a number that
+        # does not exist.
+        assert "end_to_end_p99" not in result.failures
+
+    def test_promotion_may_not_pass_on_an_unmeasured_tail(self) -> None:
+        """Same rule on the promotion gate, which is the one that decides."""
+        one = summarize_samples([_sample(ttft=10, useful=20, total=100)])
+        result = evaluate_promotion(one, one)
+        assert not result.passed
+        assert "p99_unsupported" in result.failures
+
+    def test_a_tail_gap_between_two_measured_reports_still_regresses(self) -> None:
+        """Opposite direction on the promotion gate.
+
+        A real p95/p99 regression between two adequately repeated reports
+        must still be caught -- the unsupported-tail failure must not
+        replace the regression check.
+        """
+        def _repeats(total: float, n: int = 4) -> WorkloadSample:
+            return [_sample(ttft=10, useful=20, total=total) for _ in range(n)]
+
+        baseline = summarize_samples(_repeats(100.0))
+        candidate = summarize_samples(_repeats(900.0))
+        result = evaluate_promotion(candidate, baseline)
+        assert "p95_regression" in result.failures
+        assert "p99_regression" in result.failures
+        assert "p95_unsupported" not in result.failures
+
+    def test_ranking_does_not_reward_an_unmeasured_tail(self) -> None:
+        """AC-QOS-012 ranks on useful-action latency.
+
+        An absent p95 must sort as *worst*, not as best. Substituting 0.0
+        for a missing tail would rank a report with no tail data above one
+        that measured a fast p95 -- the absence reading as the clean
+        measurement, one level up from the original defect.
+        """
+        measured = summarize_samples(
+            [
+                _sample(ttft=10, useful=20, total=100),
+                _sample(ttft=10, useful=20, total=100),
+            ]
+        )
+        unmeasured = summarize_samples([_sample(ttft=10, useful=20, total=100)])
+        assert useful_work_rank_key(measured) < useful_work_rank_key(unmeasured), (
+            "a report with no tail measurement outranked one that measured "
+            "its p95"
+        )

@@ -246,6 +246,14 @@ class CompositionProvenance:
     delta_applied: bool
     compact_refs: tuple[CompactRef, ...] = ()
     resolution: ResolvedInstructions | None = field(default=None, repr=False)
+    # Why the evidence block is in its current state. An absent evidence
+    # segment is not self-describing: a caller cannot tell "nothing was
+    # stored about this topic" from "the knowledge backend never
+    # answered", because both render as no segment at all. The model has
+    # the same ambiguity, which is how an outage turns into an ungrounded
+    # answer. Defaults to the neutral state so a direct `compose()` call
+    # that passes no evidence is not reported as a fault.
+    evidence_status: str = "none_found"
 
     @property
     def origins(self) -> tuple[str, ...]:
@@ -262,6 +270,7 @@ class CompositionProvenance:
             "composer_version": self.composer_version,
             "rehydrated": self.rehydrated,
             "delta_applied": self.delta_applied,
+            "evidence_status": self.evidence_status,
             "segments": [
                 {
                     "kind": str(s.kind),
@@ -419,6 +428,7 @@ def compose(
     max_evidence_chars: int = 2048,
     evidence_budget_tokens: int = 1024,
     token_counter: Callable[[str], int] | None = None,
+    evidence_status: str = "none_found",
 ) -> Composition:
     """Compose one request from trusted head, goal, optional delta and evidence.
 
@@ -601,6 +611,7 @@ def compose(
         delta_applied=delta_applied,
         compact_refs=tuple(used_refs),
         resolution=resolution,
+        evidence_status=evidence_status,
     )
     return Composition(messages=messages, provenance=provenance)
 

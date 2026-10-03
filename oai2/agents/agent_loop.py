@@ -25,6 +25,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,41 @@ BUILTIN_POLICY_VERSION = "1"
 #: the same reason: the tool wire is rendered into the prompt by the chat
 #: template, so a schema change is a prefix change.
 BUILTIN_TOOL_SCHEMA_VERSION = "1"
+
+
+class EvidenceStatus(StrEnum):
+    """Why the evidence block is in the state it is in.
+
+    The loop must never raise on a knowledge fault (REQ-LEARN-016), so every
+    one of these ends with the model seeing *no* evidence block. They are
+    separated because the model cannot tell them apart: a missing block
+    reads as "nothing is stored about this topic", which is only true of
+    `NONE_FOUND`.
+
+    A StrEnum so the value lands in `as_dict()` provenance and in artifacts
+    as a stable lowercase token rather than a Python object repr.
+    """
+
+    #: No knowledge store was wired. A declared configuration, not a fault.
+    NOT_WIRED = "not_wired"
+    #: Retrieval succeeded and nothing eligible matched. A real measurement.
+    NONE_FOUND = "none_found"
+    #: The store raised. The grounding never arrived; the model was not told.
+    RETRIEVAL_FAILED = "retrieval_failed"
+    #: Objects were retrieved but the evidence package could not be built.
+    PACKAGING_FAILED = "packaging_failed"
+    #: Bodies were produced and the evidence block is present.
+    AVAILABLE = "available"
+
+
+#: The state `_build_evidence_bodies` starts from, so a caller reading
+#: `last_evidence_status` before any run sees a declared default rather than
+#: a missing attribute.
+EVIDENCE_NOT_WIRED = EvidenceStatus.NOT_WIRED
+EVIDENCE_NONE_FOUND = EvidenceStatus.NONE_FOUND
+EVIDENCE_RETRIEVAL_FAILED = EvidenceStatus.RETRIEVAL_FAILED
+EVIDENCE_PACKAGING_FAILED = EvidenceStatus.PACKAGING_FAILED
+EVIDENCE_AVAILABLE = EvidenceStatus.AVAILABLE
 
 
 @dataclass(slots=True, frozen=True)
@@ -263,6 +299,11 @@ class AgentLoop:
         #: The composition used for the most recent :meth:`run`, so a caller
         #: can audit what the model actually saw (and under which digest).
         self.last_composition: Composition | None = None
+        #: Why the most recent run's evidence block is in its current state.
+        #: See :class:`EvidenceStatus`. Defaults to NOT_WIRED so the
+        #: attribute is always readable, never absent.
+        self.last_evidence_status: EvidenceStatus = EVIDENCE_NOT_WIRED
+        self._evidence_status: EvidenceStatus = EVIDENCE_NOT_WIRED
 
     @property
     def tools(self) -> tuple[ToolDefinition, ...]:
@@ -284,12 +325,24 @@ class AgentLoop:
         Never raises (REQ-LEARN-016 of #87: extraction failure must not
         affect task completion).
 
+        Those three are NOT the same fact, so the reason is recorded on
+        ``last_evidence_status`` and forwarded into the composition
+        provenance. An unreachable backend used to be indistinguishable
+        from an empty one: both produced no evidence segment, and the model
+        reads a missing segment as "there is no stored knowledge about
+        this topic" rather than "the store never answered". That is the
+        false-success shape arrived at through a backend outage.
+
+        The swallow is unchanged and deliberate. What was missing was any
+        way to tell the states apart afterwards.
+
         The bodies are handed to :func:`~oai2.agents.composer.compose`, which
         owns placement and the precedence framing. The loop deliberately does
         not build the evidence message itself: two owners of that block is
         exactly how evidence gets injected twice.
         """
         if self._knowledge_store is None:
+            self._evidence_status = EVIDENCE_NOT_WIRED
             return ()
         try:
             # Per #88 (REQ-LEARN-021), negative memory is representable
@@ -310,8 +363,10 @@ class AgentLoop:
             )
             result = self._knowledge_store.retrieve(request)
         except Exception:
+            self._evidence_status = EVIDENCE_RETRIEVAL_FAILED
             return ()
         if not result.objects:
+            self._evidence_status = EVIDENCE_NONE_FOUND
             return ()
         try:
             package: EvidencePackage = build_evidence_package(
@@ -320,7 +375,9 @@ class AgentLoop:
                 token_counter=self._token_counter,
             )
         except Exception:
+            self._evidence_status = EVIDENCE_PACKAGING_FAILED
             return ()
+        self._evidence_status = EVIDENCE_AVAILABLE
         return tuple(entry.render() for entry in package.entries)
 
     def _prefix_spec(self, policy_text: str) -> PrefixSpec:
@@ -348,6 +405,9 @@ class AgentLoop:
     ) -> AgentRun:
         """Drive one user prompt through the multi-step loop."""
         policy_text = system_prompt or default_system_prompt()
+        # Retrieved first so the reason it is empty -- or not -- is known
+        # before the provenance that has to carry that reason is built.
+        evidence_bodies = self._build_evidence_bodies(user_prompt)
         # Composition happens ONCE per run, not once per step. Steps after
         # the first must carry the conversation and tool history forward
         # verbatim; re-composing them would drop the assistant/tool turns
@@ -355,10 +415,13 @@ class AgentLoop:
         composition = compose(
             prefix=self._prefix_spec(policy_text),
             user_goal=user_prompt,
-            evidence=self._build_evidence_bodies(user_prompt),
+            evidence=evidence_bodies,
             evidence_budget_tokens=self._evidence_budget_tokens,
             token_counter=self._token_counter,
+            evidence_status=str(self._evidence_status),
         )
+        # Published only after compose, so the two can never disagree.
+        self.last_evidence_status = self._evidence_status
         self.last_composition = composition
         messages: list[dict[str, Any]] = [dict(m) for m in composition.messages]
         # The digest is forwarded on every step so the runtime's prefix KV

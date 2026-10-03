@@ -543,3 +543,180 @@ def test_a_grep_that_skipped_files_is_distinguishable_from_a_clean_one(
     assert complete.coverage_complete is True
     assert complete.unreadable_count == 0
     assert complete.output == "(no matches)"
+
+
+# --------------------------------------------------------------------------
+# #231 REQ-QOS-014 -- one replay reported a p95 and a p99 it never measured
+# --------------------------------------------------------------------------
+
+
+def test_a_single_replay_does_not_report_a_tail_it_never_measured() -> None:
+    """REQ-QOS-014 asks for p50/p95/p99 "where repetition count supports
+    tail estimates", plus sample count and variance.
+
+    `_distribution` computed the percentiles unconditionally and
+    `_percentile` had a `len(ordered) == 1` case returning the only value
+    for whatever percentile was asked. One replay therefore produced:
+
+        Distribution(count=1, mean=100.0, variance=0.0,
+                     p50=100.0, p95=100.0, p99=100.0)
+
+    -- five agreeing statistics, none of which is a tail. Measured before
+    this change, a one-replay report evaluated clean against a p99 service
+    budget:
+
+        evaluate_budget -> passed=True failures=()
+
+    This is the absence-as-clean family on the *repetition-count* axis,
+    after the same file had already closed it on the component axis
+    (`tool_ms` and friends) and on the throughput axis
+    (`verified_actions_per_second`).
+    """
+    from oai2.evals.qos import (
+        BudgetKind,
+        WorkloadBudget,
+        WorkloadClass,
+        WorkloadSample,
+        evaluate_budget,
+        summarize_samples,
+    )
+
+    one = WorkloadSample(
+        workload=WorkloadClass.NORMAL,
+        target_hardware="hw",
+        config_id="cfg",
+        ttft_ms=10.0,
+        first_useful_action_ms=20.0,
+        end_to_end_ms=100.0,
+        declared_success=True,
+        verified_success=True,
+    )
+    report = summarize_samples([one])
+
+    assert report.end_to_end_ms.count == 1
+    assert report.end_to_end_ms.p95 is None
+    assert report.end_to_end_ms.p99 is None
+
+    # The real statistics survive -- this is not "empty the data".
+    assert report.end_to_end_ms.mean == 100.0
+    assert report.end_to_end_ms.p50 == 100.0
+
+    # And the gate refuses rather than passing on the absence.
+    budget = WorkloadBudget(
+        version="v-1",
+        workload=WorkloadClass.NORMAL,
+        kind=BudgetKind.SERVICE_BUDGET,
+        target_hardware="hw",
+        config_id="cfg",
+        first_useful_action_p95_ms=1000.0,
+        end_to_end_p95_ms=1000.0,
+        end_to_end_p99_ms=1000.0,
+        max_false_success_rate=0.0,
+        min_verified_success_rate=1.0,
+        max_deadline_miss_rate=0.0,
+    )
+    result = evaluate_budget(report, budget)
+    assert not result.passed, "a single replay satisfied a p95/p99 service budget"
+    assert "end_to_end_p99_unsupported" in result.failures
+
+    # Opposite direction: with repetition, the tail is real and the gate
+    # can actually evaluate it.
+    two = summarize_samples([one, one])
+    assert two.end_to_end_ms.p95 is not None
+    assert evaluate_budget(two, budget).passed
+
+
+# --------------------------------------------------------------------------
+# #87 REQ-LEARN-016 + #226 REQ-TRUTH-005 -- an unreachable store read as empty
+# --------------------------------------------------------------------------
+
+
+def test_an_unreachable_knowledge_store_is_not_an_empty_one() -> None:
+    """`AgentLoop._build_evidence_bodies` returned `()` for three states.
+
+        if self._knowledge_store is None:  return ()
+        try:  ... retrieve ...
+        except Exception:                  return ()   <- backend down
+        if not result.objects:             return ()   <- genuinely nothing
+        try:  ... build_evidence_package ...
+        except Exception:                  return ()
+
+    Only the third means "nothing is stored about this topic". The other
+    two are a configuration and a fault. All three reached the model as the
+    same thing -- no evidence block -- and the model reads a missing block
+    as an absence of stored knowledge, not as a backend that never
+    answered. REQ-TRUTH-005 asks that insufficient evidence support an
+    UNVERIFIED / NEED_MORE_EVIDENCE outcome; here an outage silently
+    produced a confident, ungrounded answer instead.
+
+    The swallow is NOT changed. REQ-LEARN-016 requires that extraction
+    failure must not affect task completion, so this must keep never
+    raising. What was added is the ability to tell the states apart
+    afterwards, on `AgentLoop.last_evidence_status` and in
+    `CompositionProvenance.as_dict()` -- the REQ-PROMPT-025 evidence form.
+
+    Same defect class as f309d81 in `agents/learning.py`, where
+    `except Exception: return ()` in `_dedup_check` reported a failed
+    store as "no conflicts". That instance was fixed; this one was missed.
+    """
+    from oai2.agents import AgentLoop, EvidenceStatus
+    from oai2.agents.agent_loop import EvidencePackage  # noqa: F401
+    from oai2.core import Status
+    from oai2.knowledge import (
+        KnowledgeObject,
+        KnowledgeStore,
+        RetrievalRequest,
+        RetrievalResult,
+    )
+    from oai2.runtime import InferenceResponse, InferenceRuntime
+
+    class _Runtime(InferenceRuntime):
+        STATUS = Status.EXPERIMENTAL
+
+        def generate(self, request):  # type: ignore[no-untyped-def]
+            return InferenceResponse(
+                text="done",
+                tokens=1,
+                elapsed_ms=1.0,
+                device="stub",
+                status=Status.EXPERIMENTAL,
+                finish_reason="stop",
+            )
+
+    class _Empty(KnowledgeStore):
+        def put(self, obj: KnowledgeObject) -> None:
+            raise NotImplementedError
+
+        def get(self, knowledge_id):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+
+        def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+            return RetrievalResult(topic=request.topic, objects=())
+
+        def all(self):  # type: ignore[no-untyped-def]
+            return ()
+
+    class _Down(KnowledgeStore):
+        def put(self, obj: KnowledgeObject) -> None:
+            raise NotImplementedError
+
+        def get(self, knowledge_id):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+
+        def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+            raise ConnectionError("backend unreachable")
+
+        def all(self):  # type: ignore[no-untyped-def]
+            return ()
+
+    def status_for(store: KnowledgeStore | None) -> EvidenceStatus:
+        loop = AgentLoop(runtime=_Runtime(), max_steps=2, knowledge_store=store)
+        loop.run("how do I configure the scheduler?")
+        return loop.last_evidence_status
+
+    assert status_for(_Down()) is EvidenceStatus.RETRIEVAL_FAILED
+    assert status_for(_Empty()) is EvidenceStatus.NONE_FOUND
+    assert status_for(None) is EvidenceStatus.NOT_WIRED
+    # Without the contrast there would be nothing to distinguish; without
+    # the failure there would be nothing to report.
+    assert EvidenceStatus.RETRIEVAL_FAILED is not EvidenceStatus.NONE_FOUND
