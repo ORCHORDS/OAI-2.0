@@ -10,6 +10,7 @@ testable offline.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,13 @@ from oai2.agents import (
     default_system_prompt,
     default_tool_definitions,
 )
-from oai2.core import Status
+from oai2.core import KnowledgeId, Status
+from oai2.knowledge import (
+    KnowledgeObject,
+    KnowledgeStore,
+    RetrievalRequest,
+    RetrievalResult,
+)
 from oai2.protocols import ToolResult
 from oai2.runtime import (
     InferenceRequest,
@@ -347,3 +354,130 @@ def test_agent_loop_over_budget_call_is_refused_not_executed(tmp_path: Path) -> 
     assert executed == 3
     assert refusals, "the over-budget call must be recorded as a dispatch failure"
     assert all("budget exceeded" in r for r in refusals)
+
+
+# ---------------------------------------------------------------------------
+# An unreachable knowledge store must not read as an empty one
+# ---------------------------------------------------------------------------
+
+
+class _HealthyEmptyStore(KnowledgeStore):
+    """A reachable store that genuinely holds nothing relevant."""
+
+    def put(self, obj: KnowledgeObject) -> None:  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def get(self, knowledge_id: KnowledgeId) -> KnowledgeObject | None:  # pragma: no cover
+        raise NotImplementedError
+
+    def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+        return RetrievalResult(topic=request.topic, objects=())
+
+    def all(self) -> Iterable[KnowledgeObject]:  # pragma: no cover - unused
+        return ()
+
+
+class _UnreachableStore(KnowledgeStore):
+    """A store whose backend is down. Retrieval cannot answer at all."""
+
+    def put(self, obj: KnowledgeObject) -> None:  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def get(self, knowledge_id: KnowledgeId) -> KnowledgeObject | None:  # pragma: no cover
+        raise NotImplementedError
+
+    def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+        raise ConnectionError("knowledge backend unreachable")
+
+    def all(self) -> Iterable[KnowledgeObject]:  # pragma: no cover - unused
+        return ()
+
+
+class TestAFailedRetrievalIsNotAnEmptyRetrieval:
+    """`_build_evidence_bodies` returned `()` for three different states.
+
+        if self._knowledge_store is None:  return ()
+        try:  ... retrieve ...
+        except Exception:                  return ()      <- backend down
+        if not result.objects:             return ()      <- genuinely nothing
+        try:  ... build_evidence_package ...
+        except Exception:                  return ()
+
+    Only the middle one means "there is no knowledge about this topic". The
+    first is a declared configuration, the second and third are faults. All
+    three reached the model as the same thing: no evidence block at all.
+
+    The consequence is specific. This method exists to ground the model in
+    retrieved knowledge before it answers (REQ-PROMPT-023, and #226's
+    REQ-TRUTH-005 "insufficient evidence shall support UNVERIFIED ...
+    outcomes"). An unreachable backend produces a prompt with no evidence
+    segment, which the model reads as *the topic has no stored knowledge* --
+    so it answers from its own weights with nothing marking that the
+    grounding it was given never arrived. That is the false-success shape,
+    produced by a backend outage rather than by a model mistake.
+
+    The swallow itself is NOT the defect and is not changed: REQ-LEARN-016
+    requires that extraction failure must not affect task completion, so
+    this must keep never raising. What was missing is any way for a reader
+    to tell the three states apart afterwards.
+
+    Same defect class as f309d81 in `agents/learning.py`, where
+    `except Exception: return ()` in `_dedup_check` reported a failed
+    store as "no conflicts". That one was fixed; this instance was missed.
+    """
+
+    def _loop(self, store: KnowledgeStore | None) -> AgentLoop:
+        runtime = _StubRuntime(script=[_Script(text="done")])
+        return AgentLoop(
+            runtime=runtime,
+            max_steps=2,
+            knowledge_store=store,
+        )
+
+    def test_an_unreachable_backend_is_reported_as_unavailable(self) -> None:
+        loop = self._loop(_UnreachableStore())
+        loop.run("how do I configure the scheduler?")
+        assert loop.last_evidence_status == "retrieval_failed", (
+            "a knowledge backend that raised was recorded as if it had "
+            "returned no results"
+        )
+
+    def test_a_healthy_empty_backend_is_reported_as_none_found(self) -> None:
+        """The contrast case. Without it there is nothing to distinguish."""
+        loop = self._loop(_HealthyEmptyStore())
+        loop.run("how do I configure the scheduler?")
+        assert loop.last_evidence_status == "none_found"
+
+    def test_no_store_wired_is_its_own_declared_state(self) -> None:
+        loop = self._loop(None)
+        loop.run("how do I configure the scheduler?")
+        assert loop.last_evidence_status == "not_wired"
+
+    def test_the_run_still_completes_when_the_backend_is_down(self) -> None:
+        """REQ-LEARN-016: extraction failure must not affect the task.
+
+        The fix records the failure; it must not start propagating it.
+        """
+        loop = self._loop(_UnreachableStore())
+        run = loop.run("how do I configure the scheduler?")
+        assert run.final_text == "done"
+        assert run.finished_reason == "stop"
+
+    def test_the_distinction_reaches_the_composition_record(self) -> None:
+        """It has to land in provenance, not only in a local variable.
+
+        `CompositionProvenance.as_dict()` is the REQ-PROMPT-025 evidence
+        form — what an operator or an artifact actually reads. A status
+        that lives only on the loop instance is one refactor away from
+        being unreadable, which is the shape f309d81 had.
+        """
+        loop = self._loop(_UnreachableStore())
+        loop.run("how do I configure the scheduler?")
+        record = loop.last_composition.provenance.as_dict()
+        assert record["evidence_status"] == "retrieval_failed"
+
+    def test_a_measured_evidence_status_survives_to_provenance(self) -> None:
+        loop = self._loop(_HealthyEmptyStore())
+        loop.run("how do I configure the scheduler?")
+        record = loop.last_composition.provenance.as_dict()
+        assert record["evidence_status"] == "none_found"

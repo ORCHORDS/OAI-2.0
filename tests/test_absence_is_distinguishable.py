@@ -624,3 +624,99 @@ def test_a_single_replay_does_not_report_a_tail_it_never_measured() -> None:
     two = summarize_samples([one, one])
     assert two.end_to_end_ms.p95 is not None
     assert evaluate_budget(two, budget).passed
+
+
+# --------------------------------------------------------------------------
+# #87 REQ-LEARN-016 + #226 REQ-TRUTH-005 -- an unreachable store read as empty
+# --------------------------------------------------------------------------
+
+
+def test_an_unreachable_knowledge_store_is_not_an_empty_one() -> None:
+    """`AgentLoop._build_evidence_bodies` returned `()` for three states.
+
+        if self._knowledge_store is None:  return ()
+        try:  ... retrieve ...
+        except Exception:                  return ()   <- backend down
+        if not result.objects:             return ()   <- genuinely nothing
+        try:  ... build_evidence_package ...
+        except Exception:                  return ()
+
+    Only the third means "nothing is stored about this topic". The other
+    two are a configuration and a fault. All three reached the model as the
+    same thing -- no evidence block -- and the model reads a missing block
+    as an absence of stored knowledge, not as a backend that never
+    answered. REQ-TRUTH-005 asks that insufficient evidence support an
+    UNVERIFIED / NEED_MORE_EVIDENCE outcome; here an outage silently
+    produced a confident, ungrounded answer instead.
+
+    The swallow is NOT changed. REQ-LEARN-016 requires that extraction
+    failure must not affect task completion, so this must keep never
+    raising. What was added is the ability to tell the states apart
+    afterwards, on `AgentLoop.last_evidence_status` and in
+    `CompositionProvenance.as_dict()` -- the REQ-PROMPT-025 evidence form.
+
+    Same defect class as f309d81 in `agents/learning.py`, where
+    `except Exception: return ()` in `_dedup_check` reported a failed
+    store as "no conflicts". That instance was fixed; this one was missed.
+    """
+    from oai2.agents import AgentLoop, EvidenceStatus
+    from oai2.agents.agent_loop import EvidencePackage  # noqa: F401
+    from oai2.core import Status
+    from oai2.knowledge import (
+        KnowledgeObject,
+        KnowledgeStore,
+        RetrievalRequest,
+        RetrievalResult,
+    )
+    from oai2.runtime import InferenceResponse, InferenceRuntime
+
+    class _Runtime(InferenceRuntime):
+        STATUS = Status.EXPERIMENTAL
+
+        def generate(self, request):  # type: ignore[no-untyped-def]
+            return InferenceResponse(
+                text="done",
+                tokens=1,
+                elapsed_ms=1.0,
+                device="stub",
+                status=Status.EXPERIMENTAL,
+                finish_reason="stop",
+            )
+
+    class _Empty(KnowledgeStore):
+        def put(self, obj: KnowledgeObject) -> None:
+            raise NotImplementedError
+
+        def get(self, knowledge_id):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+
+        def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+            return RetrievalResult(topic=request.topic, objects=())
+
+        def all(self):  # type: ignore[no-untyped-def]
+            return ()
+
+    class _Down(KnowledgeStore):
+        def put(self, obj: KnowledgeObject) -> None:
+            raise NotImplementedError
+
+        def get(self, knowledge_id):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+
+        def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+            raise ConnectionError("backend unreachable")
+
+        def all(self):  # type: ignore[no-untyped-def]
+            return ()
+
+    def status_for(store: KnowledgeStore | None) -> EvidenceStatus:
+        loop = AgentLoop(runtime=_Runtime(), max_steps=2, knowledge_store=store)
+        loop.run("how do I configure the scheduler?")
+        return loop.last_evidence_status
+
+    assert status_for(_Down()) is EvidenceStatus.RETRIEVAL_FAILED
+    assert status_for(_Empty()) is EvidenceStatus.NONE_FOUND
+    assert status_for(None) is EvidenceStatus.NOT_WIRED
+    # Without the contrast there would be nothing to distinguish; without
+    # the failure there would be nothing to report.
+    assert EvidenceStatus.RETRIEVAL_FAILED is not EvidenceStatus.NONE_FOUND
