@@ -397,3 +397,98 @@ def test_full_loop_task_a_to_b_reuse_evidence() -> None:
     assert last["role"] == "user"
     assert "not instruction" in last["content"]
     assert "find . -name '*.py'" in last["content"]
+
+
+class _UnreachableStore:
+    """A knowledge store whose backend cannot be reached, e.g. D1 is down."""
+
+    def retrieve(self, request: Any) -> Any:
+        raise RuntimeError("D1 unreachable")
+
+
+class TestAFailedDedupCheckIsNotACleanResult:
+    """REQ-LEARN-014/022: the caller must decide about a conflict.
+
+    `_dedup_check` used to `except Exception: return ()`, which made an
+    unreachable backend return exactly the same value as a healthy backend
+    with nothing on the topic. The caller then imported a duplicate lesson
+    believing it had checked and found no conflict. Measured before the
+    change:
+
+        store RAISES (check could not run) -> ()
+        store healthy, nothing found      -> ()
+        store healthy, one conflict found -> ('EXISTING-KNOWLEDGE',)
+
+    The first two were indistinguishable. A failed safety check must not be
+    reported as a clean one.
+    """
+
+    def test_a_failing_store_raises_instead_of_reporting_no_conflicts(self) -> None:
+        run = _make_run(user_prompt="do a thing", final_text="ok")
+        with pytest.raises(RuntimeError, match="D1 unreachable"):
+            extract_lesson(
+                run,
+                task_id="t-dedup-fail",
+                verification_ref="verifier://sess-dedup-fail",
+                source_version="b224fc6",
+                runtime_version="oai2/0.1",
+                dedup_against=_UnreachableStore(),
+            )
+
+    def test_the_original_error_is_preserved_not_wrapped(self) -> None:
+        """The caller needs the real cause, not a generic wrapper.
+
+        Flattening the exception into `()` discarded which backend failed and
+        why, which is the part an operator needs to act on it.
+        """
+        run = _make_run(user_prompt="do a thing", final_text="ok")
+        with pytest.raises(RuntimeError) as excinfo:
+            extract_lesson(
+                run,
+                task_id="t-dedup-cause",
+                verification_ref="verifier://sess-dedup-cause",
+                source_version="b224fc6",
+                runtime_version="oai2/0.1",
+                dedup_against=_UnreachableStore(),
+            )
+        assert "D1 unreachable" in str(excinfo.value)
+
+    def test_opposite_direction_a_healthy_empty_store_still_reports_no_conflict(
+        self,
+    ) -> None:
+        """Guard: propagating must not turn an empty result into a failure.
+
+        This is the case the blanket `except` was presumably written to cover.
+        A healthy store that genuinely has nothing on the topic is a normal
+        outcome and must keep returning no conflicts.
+        """
+        store = InMemoryKnowledgeStore()
+        run = _make_run(user_prompt="list files in /tmp", final_text="ok")
+        obj = extract_lesson(
+            run,
+            task_id="t-dedup-empty",
+            verification_ref="verifier://sess-dedup-empty",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+            dedup_against=store,
+        )
+        assert getattr(obj, "_dedup_conflicts", ()) == ()
+
+    def test_opposite_direction_a_real_conflict_is_still_surfaced(self) -> None:
+        """Guard: the normal dedup path must be unchanged."""
+        store = InMemoryKnowledgeStore()
+        existing = _seed_lesson(
+            store,
+            topic="oai2:agent:list files in /tmp",
+            body="prior lesson body",
+        )
+        run = _make_run(user_prompt="list files in /tmp", final_text="ok")
+        obj = extract_lesson(
+            run,
+            task_id="t-dedup-conflict",
+            verification_ref="verifier://sess-dedup-conflict",
+            source_version="b224fc6",
+            runtime_version="oai2/0.1",
+            dedup_against=store,
+        )
+        assert existing in getattr(obj, "_dedup_conflicts", ())
