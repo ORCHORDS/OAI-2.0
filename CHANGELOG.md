@@ -10,6 +10,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Live admission gate binding the existing WI-QOS-002 policy core to a real serving path: `oai2.runtime.LlamaAdmissionGate` composes `AdmissionPolicy` / `AdmissionQueue` / `ResidencyAccountant` / `AdmissionDecisionTrace` into a concurrency-safe execution loop that holds a server slot for the duration of a request and releases it on completion, failure or cancellation (Refs #232). Before this, nothing outside a test file ever constructed an `AdmissionPolicy` or fed a decision to the residency accountant, so the policy was internally correct and unreachable.
+- Single owner for host memory/swap telemetry: `oai2.runtime.host_capacity.read_host_memory` (Refs #232). `scripts/bench.py::_host_memory` now delegates to it rather than keeping a second copy of a parser that once silently zeroed every swap figure.
+- `scripts/admission_probe.py`: admit-or-not measurement comparing a no-admission baseline against gated candidates on the same lane, prompts, seed and token budget, with arms interleaved per repetition (Refs #232).
+
+### Fixed
+
+- `ResidencyAccountant` refused to record a request that was queued and then rejected, leaving it permanently PENDING and inflating in-flight counts. A PENDING request re-decided as REJECT is now refused in place, mirroring the existing PENDING-to-ADMIT promotion (Refs #232).
+
 ### Changed
 
 - Repository metadata: the previous-cycle commit `86d1f04e1cfdab934ebe10a6a71001d93980cb3c` (chore: ruff nits in knowledge sweep async tests) was authored locally with the dev-shell identity `ZCode <zcode@local>` instead of the campaign identity `ORCHORDS.COM <72497645+ORCHORDS@users.noreply.github.com>` that the rest of the `main` history uses. Its content (one unused-import removal, one EOF newline) is correct and verified live (full local gate `ALL LOCAL CHECKS PASSED`); the SHA is preserved to avoid invalidating references already fetched by other agents, and this entry records the attribution regression so the trail is auditable.
