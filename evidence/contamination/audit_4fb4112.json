@@ -1,0 +1,224 @@
+{
+  "issue": 171,
+  "harness": {
+    "commit": "4fb4112c9241493879af05358e8a52accd9e3207",
+    "branch": "main",
+    "dirty": "false"
+  },
+  "policy": {
+    "shingle_size": 3,
+    "near_overlap_threshold": 0.6,
+    "min_shared_shingles": 2,
+    "min_verifier_tokens": 3,
+    "check_verifier_leak": true,
+    "allow_empty_corpus": false
+  },
+  "corpus_files": 87,
+  "corpus_dirs": [
+    "evidence",
+    "docs",
+    "evals"
+  ],
+  "suites": [
+    {
+      "suite_id": "abstention",
+      "case_count": 1,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 1,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "bug_diagnosis",
+      "case_count": 2,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 2,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "coding",
+      "case_count": 3,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 3,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "conflicting_evidence",
+      "case_count": 1,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 1,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "deterministic_hard",
+      "case_count": 12,
+      "findings": [
+        {
+          "case_id": "arithmetic_multistep",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "boolean_logic",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "capital_city",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "count_letter_in_word",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "days_in_a_week",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "distinct_letter_count",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "geometric_sequence",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "leap_year_length",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "modular_arithmetic",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "rate_word_problem",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "string_reversal",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        },
+        {
+          "case_id": "unit_conversion",
+          "entry_id": "evidence/accuracy/deterministic_hard_12_a133744.json",
+          "kind": "near_prompt",
+          "score": 1.0,
+          "provenance": "evidence"
+        }
+      ],
+      "kinds": [
+        "near_prompt"
+      ],
+      "quarantined_case_ids": [
+        "days_in_a_week",
+        "arithmetic_multistep",
+        "modular_arithmetic",
+        "count_letter_in_word",
+        "geometric_sequence",
+        "boolean_logic",
+        "unit_conversion",
+        "rate_word_problem",
+        "capital_city",
+        "distinct_letter_count",
+        "string_reversal",
+        "leap_year_length"
+      ],
+      "survivor_count": 0,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "multi_file_reasoning",
+      "case_count": 1,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 1,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "orchestration",
+      "case_count": 1,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 1,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "reasoning",
+      "case_count": 2,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 2,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "tool_use",
+      "case_count": 3,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 3,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "verification",
+      "case_count": 1,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 1,
+      "replacement_count": 0
+    },
+    {
+      "suite_id": "vision",
+      "case_count": 1,
+      "findings": [],
+      "kinds": [],
+      "quarantined_case_ids": [],
+      "survivor_count": 1,
+      "replacement_count": 0
+    }
+  ],
+  "total_findings": 12
+}
