@@ -137,8 +137,36 @@ def extract_lesson(
     finished = bool(agent_run.final_text) and agent_run.finished_reason == "stop"
     steps = len(agent_run.steps) if hasattr(agent_run, "steps") else 0
     tool_calls = getattr(agent_run, "total_tool_calls", 0)
+    # The headline must agree with the status. `object_status` below can be
+    # EXPERIMENTAL while the body used to open with an unconditional
+    # "verified lesson from task_id=..." -- two fields of one record
+    # disagreeing about whether verification happened, and the
+    # self-declaration was the one a reader meets first. This matters
+    # beyond wording: `content_hash` is sha256(content) and
+    # `R2BodyDescriptor.from_knowledge` enforces that equality, so the body
+    # is part of the object's stored identity and the claim propagates to
+    # every reader of the store.
+    #
+    # The EXPERIMENTAL headline deliberately avoids the word "verified"
+    # altogether. "unverified lesson" was the first spelling tried and it
+    # is unsafe: it *contains* the substring "verified", so any downstream
+    # check that scans the body for that token -- and this repository's own
+    # readers do, see scripts/battle_test_learning.py:1988 -- still matches
+    # it and concludes the lesson was verified. The claim has to be
+    # unreadable, not merely negated.
+    #
+    # Scoped to the EXPERIMENTAL branch on purpose. The IMPLEMENTED body is
+    # left byte-identical, so `content_hash` -- and therefore the R2 blob
+    # key `oai2-blobs/{content_hash}` -- is unchanged for lessons already
+    # stored. `finished_reason` stays in the body on both branches, so
+    # removing the false claim does not leave an absence in its place.
+    headline = (
+        f"verified lesson from task_id={task_id}"
+        if finished
+        else f"lesson candidate (status=EXPERIMENTAL) from task_id={task_id}"
+    )
     content = (
-        f"verified lesson from task_id={task_id}\n"
+        f"{headline}\n"
         f"finished_reason={agent_run.finished_reason!r}\n"
         f"steps={steps} tool_calls={tool_calls}\n"
         f"verification_ref={verification_ref}\n"
