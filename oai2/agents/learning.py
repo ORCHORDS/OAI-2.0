@@ -77,11 +77,17 @@ def _dedup_check(
     topic object already exists, the caller MUST decide whether to
     supersede, version, or keep both. We surface the candidates so
     the caller can do that explicitly.
+
+    A store that raises is NOT treated as "no conflicts". It used to be:
+    ``except Exception: return ()`` made an unreachable backend and a
+    healthy backend with an empty topic return the identical value, so the
+    caller imported a duplicate lesson believing it had checked and found
+    nothing. The rule above says the caller must decide -- it cannot decide
+    about a conflict it was never told about, so the failure is propagated
+    with its original context instead of being flattened into a clean
+    result.
     """
-    try:
-        result = store.retrieve(RetrievalRequest(topic=topic, limit=limit))
-    except Exception:
-        return ()
+    result = store.retrieve(RetrievalRequest(topic=topic, limit=limit))
     return tuple(result.objects)
 
 

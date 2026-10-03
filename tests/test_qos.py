@@ -539,3 +539,104 @@ class TestUnexercisedComponentNegativeControls:
         assert sample.decode_tokens_per_second is None, "mutation did not bite"
         with pytest.raises(AssertionError):
             assert sample.decode_tokens_per_second is not None
+class TestPromotionGatesCorrectnessNotJustLatency:
+    """`evaluate_promotion` decides promotion, so it must see correctness.
+
+    Before this, the gate checked p95, p99 and deadline misses only, while
+    its sibling `evaluate_budget` checked `false_success_rate` and
+    `verified_success_rate`. A candidate at identical latency that is never
+    verified-correct and reports a false success every time was promoted:
+
+        evaluate_promotion -> passed=True  failures=()
+        evaluate_budget    -> passed=False failures=('false_success_rate',
+                                                     'verified_success_rate')
+
+    The gate that makes the promotion decision was the one gate that could
+    not see it.
+    """
+
+    @staticmethod
+    def _good() -> list[WorkloadSample]:
+        return [
+            _sample(ttft=10, useful=50, total=100, declared=True, verified=True),
+            _sample(ttft=10, useful=50, total=100, declared=True, verified=True),
+        ]
+
+    def test_promotion_rejects_a_false_success_regression(self) -> None:
+        """Same latency, but every answer is a declared, unverified success."""
+        baseline = summarize_samples(self._good())
+        candidate = summarize_samples(
+            [
+                _sample(ttft=10, useful=50, total=100, declared=True, verified=False),
+                _sample(ttft=10, useful=50, total=100, declared=True, verified=False),
+            ]
+        )
+        assert candidate.end_to_end_ms.p95 == baseline.end_to_end_ms.p95
+        assert candidate.false_success_rate == 1.0
+        result = evaluate_promotion(candidate, baseline)
+        assert result.passed is False
+        assert "false_success_regression" in result.failures
+
+    def test_promotion_rejects_a_verified_success_regression(self) -> None:
+        """A candidate that stops producing verified work at all.
+
+        Uses `declared=False` so the false-success rate stays at 0.0 and this
+        isolates the verified-success check from the one above.
+        """
+        baseline = summarize_samples(self._good())
+        candidate = summarize_samples(
+            [
+                _sample(ttft=10, useful=50, total=100, declared=False, verified=False),
+                _sample(ttft=10, useful=50, total=100, declared=False, verified=False),
+            ]
+        )
+        assert candidate.false_success_rate == 0.0
+        assert candidate.verified_success_rate == 0.0
+        result = evaluate_promotion(candidate, baseline)
+        assert result.passed is False
+        assert "verified_success_regression" in result.failures
+
+    def test_opposite_direction_equal_correctness_still_promotes(self) -> None:
+        """Guard: a purely faster candidate is unaffected.
+
+        A correctness check that fired on anything other than an actual
+        regression would block every optimisation, which is how a safety gate
+        becomes an obstacle and gets disabled.
+        """
+        baseline = summarize_samples(self._good())
+        candidate = summarize_samples(
+            [
+                _sample(ttft=5, useful=25, total=50, declared=True, verified=True),
+                _sample(ttft=5, useful=25, total=50, declared=True, verified=True),
+            ]
+        )
+        result = evaluate_promotion(candidate, baseline)
+        assert result.passed is True
+        assert result.failures == ()
+
+    def test_opposite_direction_correctness_improvement_promotes(self) -> None:
+        """Guard: a candidate that is more correct must not be blocked."""
+        baseline = summarize_samples(
+            [
+                _sample(ttft=10, useful=50, total=100, declared=False, verified=False),
+                _sample(ttft=10, useful=50, total=100, declared=True, verified=False),
+            ]
+        )
+        candidate = summarize_samples(self._good())
+        result = evaluate_promotion(candidate, baseline)
+        assert result.passed is True
+        assert result.failures == ()
+
+    def test_latency_regression_is_still_reported_alongside_correctness(self) -> None:
+        """Guard: the new checks compose with the existing ones, not replace them."""
+        baseline = summarize_samples(self._good())
+        candidate = summarize_samples(
+            [
+                _sample(ttft=400, useful=400, total=900, declared=True, verified=False),
+                _sample(ttft=400, useful=400, total=900, declared=True, verified=False),
+            ]
+        )
+        result = evaluate_promotion(candidate, baseline)
+        assert result.passed is False
+        assert "p95_regression" in result.failures
+        assert "false_success_regression" in result.failures

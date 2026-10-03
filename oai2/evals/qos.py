@@ -323,7 +323,24 @@ def evaluate_promotion(
     max_tail_regression_ratio: float = 1.0,
     max_deadline_miss_increase: float = 0.0,
 ) -> PromotionEvaluation:
-    """Reject candidates whose tails/deadline misses regress versus baseline."""
+    """Reject candidates whose tails/deadline misses regress versus baseline.
+
+    Correctness is gated here too, and not as an optional extra. A promotion
+    gate whose only checks are latency would promote a candidate that is
+    exactly as fast as the baseline, never verified-correct, and reports a
+    false success every time. Measured before this change, with a candidate
+    at ``false_success_rate=1.0`` / ``verified_success_rate=0.0`` and
+    latency identical to the baseline::
+
+        evaluate_promotion -> passed=True  failures=()
+        evaluate_budget    -> passed=False failures=('false_success_rate',
+                                                     'verified_success_rate')
+
+    so the gate that makes the promotion decision was the one gate that could
+    not see it. The absolute limits live in :class:`WorkloadBudget` and stay
+    there; what belongs here is the same no-regression rule the deadline
+    check already applies via ``max_deadline_miss_increase=0.0``.
+    """
     if (
         candidate.workload != baseline.workload
         or candidate.target_hardware != baseline.target_hardware
@@ -348,6 +365,15 @@ def evaluate_promotion(
         > baseline.deadline_miss_rate + max_deadline_miss_increase
     ):
         failures.append("deadline_miss_regression")
+    # A candidate may not be *more* wrong than the baseline it replaces, even
+    # when it is no slower. These are regression checks, not the absolute
+    # limits: a baseline that is already failing its budget is
+    # evaluate_budget's problem, and re-deciding it here would make two gates
+    # disagree about the same report for no additional safety.
+    if candidate.false_success_rate > baseline.false_success_rate:
+        failures.append("false_success_regression")
+    if candidate.verified_success_rate < baseline.verified_success_rate:
+        failures.append("verified_success_regression")
     return PromotionEvaluation(passed=not failures, failures=tuple(failures))
 
 

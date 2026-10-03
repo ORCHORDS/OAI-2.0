@@ -301,6 +301,17 @@ class HarnessReport:
     they ran against the live gateway or the offline placeholder) plus a
     :class:`SuiteReport` per builtin suite that was executed. Pass-rate
     is aggregated across all suites.
+
+    ``pass_rate`` is a rate over cases that actually RAN. A suite that
+    raised under ``continue_on_error=True`` is recorded with ``n_cases=0``
+    and so contributes nothing to either sum, which means a harness where
+    one suite passed perfectly and another crashed reports exactly the same
+    ``n_cases``/``n_passed``/``pass_rate`` as a harness where everything
+    passed. A ``1.0`` here therefore does not mean "every suite ran", and
+    the aggregate exposes no field that would say so on its own -- use
+    :attr:`has_errors` / :attr:`errored_suite_ids` rather than reading the
+    rate alone. The per-suite ``error`` is always present on ``reports``;
+    these properties exist so a caller does not have to re-derive it.
     """
 
     runtime: str
@@ -317,6 +328,16 @@ class HarnessReport:
     @property
     def pass_rate(self) -> float:
         return 0.0 if self.n_cases == 0 else self.n_passed / self.n_cases
+
+    @property
+    def errored_suite_ids(self) -> tuple[str, ...]:
+        """Suites that raised, and so contributed no cases to ``pass_rate``."""
+        return tuple(r.suite_id for r in self.reports if r.error is not None)
+
+    @property
+    def has_errors(self) -> bool:
+        """True when any suite raised. ``pass_rate`` alone cannot show this."""
+        return any(r.error is not None for r in self.reports)
 
 
 def run_eval_harness(
