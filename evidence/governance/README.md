@@ -33,9 +33,34 @@ doing its job on real data rather than in a fixture.
 
 ## The gap this closes
 
-`evaluate_held_out_promotion` — the existing gate — checks that baseline and
-candidate cover the same `case_id` set and that none of those ids appear in
-training inputs. Reproduced on `main` before `oai2.evals.governance` existed:
+`evaluate_held_out_promotion` — the existing gate — now requires two things to
+establish isolation. A `contamination: ContaminationReport` it must be handed,
+and the cheap identity checks it already did: that baseline and candidate cover
+the same `case_id` set, and that none of those ids appear in training inputs.
+
+The content check was added in `3a0333f`. Before it, the gate's only isolation
+evidence was the identity check, and identity is not isolation: renaming a
+training case makes it held-out while its text is byte-identical. Reproduced on
+`main` before the change — the contamination module reported `exact_prompt` at
+score 1.000 and quarantined the case, and the promotion gate handed the same
+case returned:
+
+```
+passed=True   failures=[]
+```
+
+The `contamination` argument is **required**, not optional. An optional audit
+is an audit that can be omitted, which is how a real control becomes a
+decorative one; there is a test that fails if a default is introduced. A
+contaminated corpus is refused *before* any regression is computed, so no
+number is ever emitted from invalid evidence, and the result carries
+`quarantined_case_ids` so a caller can swap in clean cases via
+`select_clean_cases`.
+
+### A separate defect this does not cover
+
+Governance also closed a different hole, reproduced on `main` before
+`oai2.evals.governance` existed:
 
 ```
 two SuiteReport objects, same case_id, completely different prompt behind it
@@ -44,10 +69,13 @@ two SuiteReport objects, same case_id, completely different prompt behind it
 
 The gate could not see the difference, because the prompt is not an input to
 the comparison. A scorer change was equally invisible: `scorer` never reached
-the function. `test_governed_gate_refuses_the_comparison_the_raw_gate_accepted`
-pins exactly this, and asserts that the raw gate still accepts it — so the test
-would notice if the underlying defect were ever fixed and the governed path
-became redundant.
+the function. That is caught by the governed path's revision/scorer
+comparability check, **not** by the contamination audit — a prompt swapped
+under a reused case ID with a clean audit is still accepted by the raw gate.
+`test_governed_gate_refuses_the_comparison_the_raw_gate_accepted` pins exactly
+this, and asserts that the raw gate still accepts it — so the test would notice
+if the underlying defect were ever fixed and the governed path became
+redundant.
 
 ## Controls
 
@@ -58,6 +86,11 @@ became redundant.
 - `test_absent_audit_blocks_promotion`: a record with no audit is `UNKNOWN`
   and blocks. Without `AuditStatus.UNKNOWN` the oldest, least-governed numbers
   would gate a promotion.
+- `test_a_contaminated_corpus_cannot_be_promoted` and its four siblings in
+  `tests/test_regression_evals.py`: the audit is required, a dirty corpus is
+  refused before any regression is computed, and a clean corpus still
+  promotes — so the fix cannot be satisfied by failing everything. The
+  "required, not optional" property has its own test.
 - `test_clean_and_matching_records_reach_the_numeric_gate` proves the governed
   path is a *pre-gate*, not a replacement: the numeric decision still comes
   from `evaluate_held_out_promotion`, unchanged.
