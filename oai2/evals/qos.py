@@ -189,7 +189,23 @@ class WorkloadReport:
     verified_success_rate: float
     false_success_rate: float
     deadline_miss_rate: float
-    verified_actions_per_second: float
+    # None when the sample set has no measurable elapsed time at all, i.e.
+    # every replay recorded `end_to_end_ms == 0.0`. A rate is actions divided
+    # by time; with no time there is no rate to report, so the figure is
+    # UNDEFINED rather than zero. 0.0 remains the genuine measured value for a
+    # run that spent real time and completed no verified actions.
+    verified_actions_per_second: float | None
+
+    @property
+    def throughput_measured(self) -> bool:
+        """Whether a throughput rate could be derived at all.
+
+        False means no replay contributed measurable elapsed time, so
+        `verified_actions_per_second` is None. This is distinct from a
+        measured 0.0, which means time WAS measured and no action was
+        verified inside it.
+        """
+        return self.verified_actions_per_second is not None
 
 
 @dataclass(slots=True, frozen=True)
@@ -274,8 +290,13 @@ def summarize_samples(samples: list[WorkloadSample]) -> WorkloadReport:
         verified_success_rate=sum(sample.verified_success for sample in samples) / n,
         false_success_rate=sum(sample.false_success for sample in samples) / n,
         deadline_miss_rate=sum(sample.deadline_missed for sample in samples) / n,
+        # Division by zero would raise, and the reflexive repair was to report
+        # 0.0. But 0.0 is a CLAIM: it says time was measured and no action was
+        # verified within it. With total_seconds == 0.0 no elapsed time was
+        # ever measured, so the rate does not exist. Reporting None makes the
+        # absence visible instead of inventing a clean figure for it.
         verified_actions_per_second=(
-            verified_actions / total_seconds if total_seconds > 0.0 else 0.0
+            verified_actions / total_seconds if total_seconds > 0.0 else None
         ),
     )
 

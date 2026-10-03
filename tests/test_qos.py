@@ -640,3 +640,78 @@ class TestPromotionGatesCorrectnessNotJustLatency:
         assert result.passed is False
         assert "p95_regression" in result.failures
         assert "false_success_regression" in result.failures
+
+
+class TestThroughputWithoutMeasurableTime:
+    """A rate is actions DIVIDED BY time.
+
+    `end_to_end_ms == 0.0` is the documented legal encoding of "this replay
+    occurred and took no measurable time". When every replay in a sample set
+    is like that there is no elapsed time, so there is no rate to report.
+
+    Reporting 0.0 in that case is not a conservative default, it is a claim:
+    it says time was measured and no verified action occurred inside it. The
+    two readings are materially different and both are plausible, which is
+    exactly what makes reporting the wrong one unsafe.
+    """
+
+    def test_no_measurable_elapsed_time_leaves_the_rate_undefined(self) -> None:
+        report = summarize_samples(
+            [
+                _sample(ttft=0.0, useful=0.0, total=0.0, actions=4),
+                _sample(ttft=0.0, useful=0.0, total=0.0, actions=4),
+                _sample(ttft=0.0, useful=0.0, total=0.0, actions=4),
+            ]
+        )
+        assert report.sample_count == 3
+        assert report.verified_actions_per_second is None
+        assert report.throughput_measured is False
+
+    def test_a_genuine_measured_zero_is_not_conflated_with_an_undefined_rate(
+        self,
+    ) -> None:
+        # Real elapsed time was measured (30s) and no action was verified in
+        # it. That is a true zero and must stay 0.0.
+        measured_zero = summarize_samples(
+            [
+                _sample(ttft=0.0, useful=0.0, total=10_000.0, actions=0),
+                _sample(ttft=0.0, useful=0.0, total=10_000.0, actions=0),
+                _sample(ttft=0.0, useful=0.0, total=10_000.0, actions=0),
+            ]
+        )
+        unmeasured = summarize_samples(
+            [
+                _sample(ttft=0.0, useful=0.0, total=0.0, actions=4),
+                _sample(ttft=0.0, useful=0.0, total=0.0, actions=4),
+            ]
+        )
+        assert measured_zero.verified_actions_per_second == 0.0
+        assert measured_zero.throughput_measured is True
+        assert unmeasured.verified_actions_per_second is None
+        # The whole point: a reader can tell these two records apart.
+        assert measured_zero.verified_actions_per_second != (
+            unmeasured.verified_actions_per_second
+        )
+
+    def test_a_perfect_run_is_not_rendered_as_a_self_contradictory_record(self) -> None:
+        # Before the fix this produced verified_success_rate == 1.0 alongside
+        # verified_actions_per_second == 0.0: twelve verified actions at zero
+        # throughput, which is not a possible physical outcome.
+        report = summarize_samples(
+            [
+                _sample(ttft=0.0, useful=0.0, total=0.0, actions=4),
+                _sample(ttft=0.0, useful=0.0, total=0.0, actions=4),
+            ]
+        )
+        assert report.verified_success_rate == 1.0
+        assert report.verified_actions_per_second is None
+
+    def test_an_ordinary_run_still_reports_its_rate(self) -> None:
+        report = summarize_samples(
+            [
+                _sample(ttft=5, useful=20, total=100, actions=2),
+                _sample(ttft=5, useful=20, total=100, actions=2),
+            ]
+        )
+        assert report.verified_actions_per_second == pytest.approx(20.0)
+        assert report.throughput_measured is True

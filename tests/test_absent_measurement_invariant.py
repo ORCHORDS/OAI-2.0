@@ -113,12 +113,7 @@ ALLOWED_ZERO_SUBSTITUTIONS = {
     "oai2/knowledge/evidence_package.py:213",
     # Population variance of a singleton IS zero, and `Distribution.count`
     # is honest about being 1. The sample count travels with the number.
-    "oai2/evals/qos.py:222",
-    # Throughput over zero elapsed time is zero actions per second. The
-    # divisor is derived from `end_to_end_ms`, which is a REQUIRED field on
-    # every sample, so this is a workload that really did take no time --
-    # not a measurement that was skipped.
-    "oai2/evals/qos.py:278",
+    "oai2/evals/qos.py:238",
 }
 
 
@@ -278,6 +273,63 @@ class TestAbsenceIsReportedAsAbsence:
         # The honest components are untouched.
         assert report.ttft_ms.count == 40
 
+    def test_qos_leaves_throughput_undefined_when_no_time_was_measured(self) -> None:
+        """A rate is actions divided by time; with no time there is no rate.
+
+        This site was previously allowlisted in this file on the reasoning
+        that `end_to_end_ms` is a REQUIRED field, so a 0.0 divisor must mean
+        a workload that really did take no time. That reasoning was wrong and
+        the wrongness is the point: a required field is not a measured one.
+        A harness that records no timing at all still has to supply something
+        for `end_to_end_ms`, and 0.0 is what it will supply. Requiring the
+        field did not make the measurement exist; it only removed the
+        compiler's objection to a fabricated one.
+        """
+        unmeasured = summarize_samples(
+            [
+                WorkloadSample(
+                    workload=WorkloadClass.NORMAL,
+                    target_hardware="hw",
+                    config_id="c",
+                    ttft_ms=0.0,
+                    first_useful_action_ms=0.0,
+                    end_to_end_ms=0.0,
+                    declared_success=True,
+                    verified_success=True,
+                    verified_actions=4,
+                    generated_tokens=0,
+                )
+                for _ in range(3)
+            ]
+        )
+        # Twelve verified actions and a throughput of 0.0/sec is not a
+        # possible physical outcome; it is a number standing in for a rate
+        # that was never computed.
+        assert unmeasured.verified_success_rate == 1.0
+        assert unmeasured.verified_actions_per_second is None
+        assert unmeasured.throughput_measured is False
+
+        # A true zero survives: time WAS measured, and nothing was verified.
+        measured_zero = summarize_samples(
+            [
+                WorkloadSample(
+                    workload=WorkloadClass.NORMAL,
+                    target_hardware="hw",
+                    config_id="c",
+                    ttft_ms=0.0,
+                    first_useful_action_ms=0.0,
+                    end_to_end_ms=10_000.0,
+                    declared_success=True,
+                    verified_success=True,
+                    verified_actions=0,
+                    generated_tokens=0,
+                )
+                for _ in range(3)
+            ]
+        )
+        assert measured_zero.verified_actions_per_second == 0.0
+        assert measured_zero.throughput_measured is True
+
 
 class TestInvariantNegativeControls:
     """Mutate a surface; the guards above must fail."""
@@ -355,3 +407,59 @@ class TestInvariantNegativeControls:
         assert module._percentile([], 500.0) is None
         with pytest.raises(ValueError):
             real._percentile([], 500.0)
+
+    def test_control_qos_zero_denominator_fallback_restored(self, tmp_path) -> None:
+        """Restore the `else 0.0` on an unmeasurable denominator.
+
+        This control is the reason the site above is a *behavioural* pin and
+        not only an allowlist removal. It restores the exact original
+        fallback in a copy of the real module and shows the mutant produces
+        the self-contradictory record (perfect success, zero throughput)
+        that the shipped module refuses to produce.
+        """
+        import importlib.util
+        import sys
+
+        source = (OAI2 / "evals" / "qos.py").read_text()
+        anchor = "verified_actions / total_seconds if total_seconds > 0.0 else None"
+        assert anchor in source, "anchor moved; control is stale"
+        target = tmp_path / "mutant_qos.py"
+        target.write_text(
+            source.replace(
+                anchor,
+                "verified_actions / total_seconds if total_seconds > 0.0 else 0.0",
+                1,
+            )
+        )
+        name = "oai2.evals._mutant_qos"
+        spec = importlib.util.spec_from_file_location(name, target)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            del sys.modules[name]
+            raise
+
+        sample = module.WorkloadSample(
+            workload=module.WorkloadClass.NORMAL,
+            target_hardware="hw",
+            config_id="c",
+            ttft_ms=0.0,
+            first_useful_action_ms=0.0,
+            end_to_end_ms=0.0,
+            declared_success=True,
+            verified_success=True,
+            verified_actions=4,
+            generated_tokens=0,
+        )
+        mutant = module.summarize_samples([sample, sample, sample])
+        assert mutant.verified_actions_per_second == 0.0
+        # The contradiction the fix removes: a perfect run at zero throughput.
+        assert mutant.verified_success_rate == 1.0
+        assert mutant.throughput_measured is True
+
+        real = summarize_samples([sample, sample, sample])
+        assert real.verified_actions_per_second is None
+        assert real.throughput_measured is False
